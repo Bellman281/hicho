@@ -1,0 +1,29 @@
+[package]
+name = "url-shortener"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "A clean, layered URL shortener REST API (Axum + SQLite/sqlx)."
+license = "MIT"
+
+# Only dependencies actually used by the current code are declared. Later PRs
+# add their own: sqlx (PR #4), serde derive (PR #5), tower/tower-http (PR #6).
+[dependencies]
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+serde_json = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "test-util"] }
+tower = { version = "0.4", features = ["util"] }
+http-body-util = "0.1"
+
+# Note: panic strategy is left at the default (unwind) so a panic in one request
+# handler fails only that request rather than aborting the whole server. A
+# tower-http CatchPanicLayer is added in PR #6 for defence in depth.
+[profile.release]
+lto = "thin"
+codegen-units = 1
