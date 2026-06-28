@@ -6,9 +6,12 @@
 //! no leaked connections. Queries use the runtime API (not the compile-time
 //! `query!` macros) so the build needs no live database or offline metadata.
 
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
+};
 use sqlx::{Row, SqlitePool};
 use std::str::FromStr;
+use std::time::Duration;
 
 use crate::domain::{BoxedError, Link, LinkRepository, RepoError, ShortCode, TargetUrl};
 
@@ -20,8 +23,20 @@ pub struct SqliteLinkRepository {
 
 impl SqliteLinkRepository {
     /// Open (creating the file if needed) a bounded pool and run migrations.
+    ///
+    /// Concurrency tuning applied to every connection:
+    /// - **WAL** journal mode lets many readers run concurrently with a single
+    ///   writer (the default rollback journal blocks readers during writes).
+    /// - **`synchronous = NORMAL`** is the safe, recommended pairing with WAL:
+    ///   durable across app crashes, far fewer fsyncs than `FULL`.
+    /// - **`busy_timeout`** makes a contended writer wait briefly instead of
+    ///   failing immediately with `SQLITE_BUSY`.
     pub async fn connect(database_url: &str, max_connections: u32) -> Result<Self, BoxedError> {
-        let options = SqliteConnectOptions::from_str(database_url)?.create_if_missing(true);
+        let options = SqliteConnectOptions::from_str(database_url)?
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Normal)
+            .busy_timeout(Duration::from_secs(5));
 
         let pool = SqlitePoolOptions::new()
             .max_connections(max_connections)

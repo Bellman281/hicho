@@ -1,40 +1,122 @@
 # URL Shortener
 
-A clean, layered URL shortener REST API built with **Axum** and **SQLite/sqlx**.
+A production-minded URL shortener REST API in **Rust**, built on **Axum** with
+**SQLite/sqlx** storage. The codebase is organised as a **hexagonal (ports &
+adapters) architecture** with a strict inward-pointing dependency rule, so the
+business logic is framework- and database-agnostic and fully unit-testable.
 
-> Status: **functional through PR #5** — create, redirect (302), fetch metadata,
-> and delete are all working over SQLite. Hardening (timeouts, rate limiting,
-> DB-backed readiness) is PR #6. See
-> [`../docs/PR_PLAN_url_shortener.md`](../docs/PR_PLAN_url_shortener.md).
+> Status: functional through PR #5, with SQLite concurrency tuning (WAL +
+> `busy_timeout`) applied. Roadmap: [`../docs/PR_PLAN_url_shortener.md`](../docs/PR_PLAN_url_shortener.md).
+> Scaling deep-dive: [`../docs/SCALING.md`](../docs/SCALING.md).
 
 ## Endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/api/links` | Create a short link (`{"url": "...", "alias": "optional"}`) |
-| `GET` | `/:code` | 302 redirect to the original URL (counts a hit) |
+| `POST` | `/api/links` | Create a short link (`{"url": "...", "alias": "optional"}`) → `201` |
+| `GET` | `/:code` | **302** redirect to the original URL (counts a hit) |
 | `GET` | `/api/links/:code` | Link metadata (target, hits, created_at) |
-| `DELETE` | `/api/links/:code` | Remove a link |
+| `DELETE` | `/api/links/:code` | Remove a link → `204` |
 | `GET` | `/health` | Liveness probe |
 
-## Layout
+## Architecture
 
 ```
-src/
-  main.rs          Composition root (config -> repo -> app -> serve)
-  lib.rs           AppState + build_app(); injects the repository
-  config.rs        Env-driven Config
-  error.rs         AppError -> IntoResponse (+ unit tests)
-  domain/          Link, ShortCode/TargetUrl validation, LinkRepository port
-  application/     LinkService use cases + ServiceError
-  infrastructure/  InMemoryLinkRepository + SqliteLinkRepository
-  api/             Axum router, handlers, DTOs
-tests/
-  health.rs        /health integration test
-  links.rs         End-to-end link lifecycle (in-memory repo)
+            HTTP            use cases            port            adapter
+client ──▶  api  ─────────▶ application ───────▶ domain  ◀─────── infrastructure
+          (Axum)          (LinkService)      (LinkRepository)   (SQLite / in-memory)
+                                  │                                     │
+                                  └──────────── depends on ─────────────┘
+                                         (the trait, not the DB)
 ```
 
-Architecture rationale: [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
+Dependency arrows point **inward only**. `domain` knows nothing about Axum or
+sqlx; `application` depends on the `domain` port; `api` and `infrastructure`
+depend on `domain`. Concretely:
+
+| Layer | Module | Responsibility |
+|---|---|---|
+| Domain | `src/domain` | Entities (`Link`), validated newtypes (`ShortCode`, `TargetUrl`), and the `LinkRepository` **port**. Pure, no I/O. |
+| Application | `src/application` | `LinkService` use cases (create / resolve / get / delete) + short-code generation. Depends only on the port. |
+| Infrastructure | `src/infrastructure` | Adapters implementing the port: `SqliteLinkRepository` (production) and `InMemoryLinkRepository` (tests/dev). |
+| API | `src/api` | Axum router, handlers, DTOs; maps HTTP ⇄ use cases and `ServiceError` → `AppError`. |
+| Composition | `src/main.rs`, `src/lib.rs` | Build config, construct the adapter, inject it as `Arc<dyn LinkRepository>`, serve with graceful shutdown. |
+
+**Why this matters:** swapping SQLite for PostgreSQL or Redis, or adding a cache,
+is a new adapter behind the same port — the domain and application layers don't
+change a line. The `LinkRepository` trait is the seam (Dependency Inversion).
+
+### Request lifecycle
+
+- **Create** — handler validates JSON → `LinkService::create` builds a validated
+  `TargetUrl`, picks a code (custom alias or generated), and inserts via the
+  port. The DB's primary key is the uniqueness arbiter.
+- **Redirect** — `GET /:code` → `LinkService::resolve` looks up the target by
+  primary key, counts the hit, and returns `302 Found` with a `Location` header.
+
+## Design decisions & FAQ
+
+**Do we cache?** Reads are extremely skewed (a few codes get most hits), so a
+cache is worthwhile — but it belongs in an **external store (Redis)**, not an
+in-process map, so every app instance stays stateless and horizontally
+scalable. The `code → target` mapping is immutable for a link's lifetime, so it
+is safe to cache and only needs invalidation on delete. *(Planned.)*
+
+**Why random codes instead of a sequential counter?** Generated codes are random
+7-char base62. A sequential counter would be shorter but (1) **enumerable** —
+anyone could scan `/1`, `/2`, … to harvest every link and infer total volume,
+and (2) would require a **shared atomic counter**, i.e. exactly the cross-instance
+shared state we avoid. Random codes need no coordination between instances.
+
+**How is a short code reversed to the original URL?** It isn't decoded — it's a
+key lookup. We persist the `code → target` row at create time; `resolve` reads it
+back by primary key (cheap, index-backed) and redirects to the stored target.
+
+**How are duplicate *codes* prevented?** The `code` column is the table's
+`PRIMARY KEY`, so the database physically cannot hold two rows with the same
+code. A clashing insert returns a unique-constraint violation, mapped to
+`Conflict`.
+
+**What about duplicate *target URLs*?** We intentionally **do not** deduplicate
+identical long URLs — each create is its own link with its own code, optional
+alias, and independent hit count (this is how mainstream shorteners behave). To
+enforce one-code-per-URL instead, add a unique index on `target` and look up
+before insert; the trade-off is losing custom aliases and per-link analytics.
+
+**Collisions when many requests arrive at the same instant?** Handled with no
+shared state, because the **database is the arbiter**. Two requests that generate
+the same random code both attempt to insert; the primary key lets exactly one
+win, the loser receives a unique violation, and `create` retries with a fresh
+code (optimistic insert + bounded retry). At 7 base62 chars the collision
+probability is ~10⁻⁶ even at 10M links, so retries are rare. Custom-alias clashes
+return `409 Conflict`.
+
+**Read/write concurrency.** Two aspects:
+- *Correctness:* hits are counted with `UPDATE … SET hits = hits + 1`, a single
+  atomic read-modify-write — concurrent redirects never lose counts (doing the
+  arithmetic in application code would create a lost-update race).
+- *Throughput:* SQLite allows one writer at a time. We enable **WAL** (concurrent
+  readers + one writer) plus a **`busy_timeout`** so writers wait rather than
+  erroring. Heavy concurrency ultimately wants PostgreSQL (MVCC: readers never
+  block writers) and/or moving hit-counting off the request path.
+
+**Shared-state philosophy.** The service is **share-nothing**: handlers derive
+everything from the request plus injected read-only dependencies, and all
+mutable state lives in the datastore. `Arc<dyn LinkRepository>` is *shared
+ownership of an immutable handle*, not shared mutable state — so there are no
+locks on the production request path. This is precisely what lets you run many
+interchangeable instances behind a load balancer.
+
+See [`../docs/SCALING.md`](../docs/SCALING.md) for the full path to ~10M users
+(external cache, channel-batched hit counting, PostgreSQL, horizontal scaling).
+
+## Memory & safety
+
+`#![forbid(unsafe_code)]` across the crate. Configuration is injected (no
+globals). Shared state is a single `Arc` (pointer-clone per request, never a data
+copy). The SQLite pool is bounded (`DATABASE_MAX_CONNECTIONS`) so connection
+memory is capped. Request bodies are size-limited. Shutdown is graceful so the
+pool drains — no leaked connections, no `Box::leak`, no reference cycles.
 
 ## Run
 
@@ -44,20 +126,15 @@ cargo run
 ```
 
 ```bash
-# Create
-curl -X POST http://127.0.0.1:8080/api/links \
+# Create — capture the returned code
+curl -s -X POST http://127.0.0.1:8080/api/links \
   -H 'Content-Type: application/json' \
   -d '{"url":"https://example.com"}'
-# -> 201 {"code":"Ab3xY7q","short_url":"http://127.0.0.1:8080/Ab3xY7q",...}
+# -> 201 {"code":"9KGJ8rw","short_url":"http://127.0.0.1:8080/9KGJ8rw",...}
 
-# Follow the redirect (use -L to actually go there)
-curl -i http://127.0.0.1:8080/Ab3xY7q          # 302 + Location header
-
-# Metadata
-curl http://127.0.0.1:8080/api/links/Ab3xY7q   # {"code":...,"hits":1,...}
-
-# Delete
-curl -X DELETE http://127.0.0.1:8080/api/links/Ab3xY7q   # 204
+curl -i http://127.0.0.1:8080/9KGJ8rw            # 302 + Location header
+curl http://127.0.0.1:8080/api/links/9KGJ8rw     # {"hits":1,...}
+curl -X DELETE http://127.0.0.1:8080/api/links/9KGJ8rw   # 204
 ```
 
 ## Quality gates
@@ -68,7 +145,18 @@ cargo clippy -- -D warnings
 cargo fmt --check
 ```
 
-`#![forbid(unsafe_code)]`; config injected (no globals); the repository is
-injected as `Arc<dyn LinkRepository>` (swap SQLite for in-memory without
-touching handlers); the SQLite pool is bounded; request bodies are size limited;
-shutdown is graceful so the pool drains without leaks.
+## Layout
+
+```
+src/
+  main.rs          Composition root (config -> repo -> app -> serve)
+  lib.rs           AppState + build_app(); injects the repository
+  config.rs        Env-driven Config
+  error.rs         AppError -> IntoResponse (+ unit tests)
+  domain/          Link, ShortCode/TargetUrl validation, LinkRepository port
+  application/      LinkService use cases + ServiceError
+  infrastructure/  InMemoryLinkRepository + SqliteLinkRepository (WAL-tuned)
+  api/             Axum router, handlers, DTOs
+migrations/        SQLite schema
+tests/             health + end-to-end link lifecycle
+```
