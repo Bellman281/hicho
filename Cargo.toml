@@ -4,3 +4,10 @@
 [workspace]
 resolver = "2"
 members = ["url-shortener"]
+
+# Build profiles must live at the workspace root (Cargo ignores them in members).
+# Panic strategy is left at the default (unwind) so a panicking handler fails
+# only that request; tower-http's CatchPanicLayer also maps panics to 500.
+[profile.release]
+lto = "thin"
+codegen-units = 1

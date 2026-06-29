@@ -31,10 +31,3 @@ tower-http = { version = "0.5", features = ["trace", "timeout", "catch-panic"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "test-util"] }
 tower = { version = "0.4", features = ["util"] }
 http-body-util = "0.1"
-
-# Note: panic strategy is left at the default (unwind) so a panic in one request
-# handler fails only that request rather than aborting the whole server. A
-# tower-http CatchPanicLayer is added in PR #6 for defence in depth.
-[profile.release]
-lto = "thin"
-codegen-units = 1
