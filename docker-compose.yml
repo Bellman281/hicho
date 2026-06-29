@@ -1,0 +1,21 @@
+services:
+  url-shortener:
+    build: .
+    image: url-shortener:latest
+    ports:
+      - "8080:8080"
+    environment:
+      # Override the image defaults here for your deployment.
+      PUBLIC_BASE_URL: http://localhost:8080
+      RUST_LOG: info
+    volumes:
+      - urldata:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  urldata:

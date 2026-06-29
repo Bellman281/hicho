@@ -195,6 +195,28 @@ curl http://127.0.0.1:8080/api/links/9KGJ8rw     # {"hits":1,...}
 curl -X DELETE http://127.0.0.1:8080/api/links/9KGJ8rw   # 204
 ```
 
+## Run with Docker
+
+The Docker build context is the **repository root** (it's a Cargo workspace), so
+run these from the repo root, not from `url-shortener/`:
+
+```bash
+docker compose up --build
+# API on http://localhost:8080 ; SQLite persisted in the named volume `urldata`
+```
+
+Without compose:
+
+```bash
+docker build -t url-shortener .
+docker run -p 8080:8080 -v urldata:/data url-shortener
+```
+
+The image binds to `0.0.0.0:8080`, stores the DB at `/data/links.db` (a mounted
+volume), and ships a container `HEALTHCHECK` against `/health/ready`. CI
+(`.github/workflows/ci.yml`) runs `fmt`, `clippy -D warnings`, and `test` on
+every push and PR.
+
 ## Quality gates
 
 ```bash
