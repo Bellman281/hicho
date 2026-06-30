@@ -50,6 +50,11 @@ ConcurrencyLimitLayer (`MAX_CONCURRENT_REQUESTS`), and the body-size limit.
 `/health` is dependency-free liveness; `/health/ready` checks the DB (`503` when
 unreachable). Shutdown is graceful so the pool drains.
 
+**Per-IP rate limiting** (opt-in): set `RATE_LIMIT_RPS` > 0 (with optional
+`RATE_LIMIT_BURST`) to cap requests per client IP via an in-process token
+bucket; over-limit requests get `429`. Per-instance limit (each replica counts
+independently).
+
 ## Quality gates
 
 ```bash

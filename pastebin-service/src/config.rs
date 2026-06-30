@@ -21,6 +21,10 @@ pub struct Config {
     pub request_timeout_secs: u64,
     /// Max in-flight requests; excess requests wait (bounded by the timeout).
     pub max_concurrent_requests: usize,
+    /// Per-IP rate limit in requests/second. `0` disables rate limiting.
+    pub rate_limit_rps: u32,
+    /// Per-IP burst capacity. When `0` and `rate_limit_rps > 0`, defaults to rps.
+    pub rate_limit_burst: u32,
 }
 
 impl Config {
@@ -52,6 +56,14 @@ impl Config {
             .parse()
             .map_err(|_| ConfigError::Invalid("MAX_CONCURRENT_REQUESTS"))?;
 
+        let rate_limit_rps = env_or("RATE_LIMIT_RPS", "0")
+            .parse()
+            .map_err(|_| ConfigError::Invalid("RATE_LIMIT_RPS"))?;
+
+        let rate_limit_burst = env_or("RATE_LIMIT_BURST", "0")
+            .parse()
+            .map_err(|_| ConfigError::Invalid("RATE_LIMIT_BURST"))?;
+
         Ok(Self {
             bind_addr,
             max_body_bytes,
@@ -60,6 +72,8 @@ impl Config {
             public_base_url,
             request_timeout_secs,
             max_concurrent_requests,
+            rate_limit_rps,
+            rate_limit_burst,
         })
     }
 }
