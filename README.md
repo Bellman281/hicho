@@ -99,7 +99,7 @@ What that protects, and what it does **not** (read before trusting it with secre
 - ✅ A server breach or a subpoena yields only ciphertext.
 - ✅ Burn-after-read and TTL limit how long a secret can exist.
 - ⚠️ You must **trust the server to serve honest JavaScript** — use HTTPS (ideally HSTS); a compromised server could ship code that leaks the key.
-- ⚠️ Anyone with the full link (including the `#key`) can read the paste. There is **no password layer yet** (see roadmap), so share links privately.
+- ✅ **Optional password protection**: when set, the key is derived (PBKDF2-SHA256) from the URL-fragment key *and* a password, so the link alone won't decrypt it. Without a password, anyone with the full link (including the `#key`) can read the paste — so share links privately.
 - ⚠️ Access logs can still reveal *who* fetched a paste, even if not *what*.
 
 Details: [`pastebin-service/README.md`](./pastebin-service/README.md).
@@ -115,15 +115,15 @@ and ones worth adding next:
 | Client-side AES-256-GCM, key in URL fragment | ✅ | ✅ | core zero-knowledge model |
 | Expiry incl. "never" + burn-after-read | ✅ | ✅ | our `ttl_seconds` + `one_shot` |
 | Plausible-deniability / admin can delete | ✅ | ✅ | server stores only ciphertext |
-| **Password protection** (extra secret, not in URL) | ✅ | ⬜ | derive the key from `random_key + password` via PBKDF2 — strong next step |
+| **Password protection** (extra secret, not in URL) | ✅ | ✅ | key derived from `url_key + password` via PBKDF2-SHA256 |
 | **Syntax highlighting / Markdown** rendering | ✅ | ◐ | we store a `syntax` hint; client could highlight/render |
 | **QR code** for the share link | ✅ | ⬜ | small client-only addition |
 | File / image upload + preview | ✅ | ⬜ | larger scope; size-limited |
 | Comments / discussions | ✅ | ⬜ | out of scope for now |
 | Themes / i18n | ✅ | ⬜ | cosmetic |
 
-The highest-value additions for us are **password protection** (closes the
-"anyone with the link can read it" gap) and **client-side syntax highlighting**.
+The next additions worth doing are **client-side syntax highlighting** and a
+**QR code** for share links.
 
 ## Repository map
 

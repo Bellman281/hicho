@@ -42,8 +42,11 @@ How it works:
   compromised server could ship code that exfiltrates the key. Always use
   **HTTPS** (ideally with HSTS); don't open links from an instance you suspect is
   compromised.
-- ⚠️ **Anyone with the full link can read the paste** — the key *is* in the URL
-  fragment, and there is **no password layer yet**. Share links privately.
+- ✅ **Optional password protection** — when set, the AES key is derived
+  (PBKDF2-SHA256) from *both* the URL-fragment key **and** the password, so the
+  link alone is not enough; the password is never stored or sent. Without a
+  password, anyone with the full link can read the paste, so share links
+  privately.
 - ⚠️ **Access logs** can reveal *who* fetched a paste (not *what*).
 
 This is the same model as [PrivateBin](https://github.com/PrivateBin/PrivateBin);

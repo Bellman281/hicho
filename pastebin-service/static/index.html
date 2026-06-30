@@ -41,16 +41,28 @@
       <label><input type="checkbox" id="oneshot"> burn after reading</label>
     </div>
     <div class="row">
+      <label>Password (optional):
+        <input type="password" id="password" placeholder="leave empty for none" autocomplete="new-password">
+      </label>
+      <div class="muted">If set, the password is required <em>in addition</em> to the link — share it separately.</div>
+    </div>
+    <div class="row">
       <button id="createBtn" type="button">Encrypt &amp; create</button>
     </div>
     <div class="row hidden" id="result">
       <strong>Share this link</strong> (keep the part after <code>#</code> secret):
       <div id="link"></div>
+      <div class="muted hidden" id="pwNote">This paste is password-protected — share the password separately.</div>
     </div>
   </section>
 
   <section id="view" class="hidden">
     <div id="error" class="row" style="color:#b00000"></div>
+    <div id="pwPrompt" class="row hidden">
+      This paste is password-protected.
+      <input type="password" id="viewPassword" placeholder="password" autocomplete="off">
+      <button id="unlockBtn" type="button">Unlock</button>
+    </div>
     <pre id="output"></pre>
     <p class="muted">Decrypted locally in your browser.</p>
     <p class="row"><a href="/">Create a new paste</a></p>

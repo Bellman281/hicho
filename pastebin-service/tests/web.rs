@@ -61,6 +61,7 @@ async fn serves_app_js_as_javascript() {
     let (status, content_type, body) = get("/app.js").await;
     assert_eq!(status, StatusCode::OK);
     assert!(content_type.unwrap().contains("javascript"));
-    // The client must use authenticated AES-GCM.
+    // The client must use authenticated AES-GCM and PBKDF2 key derivation.
     assert!(body.contains("AES-GCM"));
+    assert!(body.contains("PBKDF2"));
 }
