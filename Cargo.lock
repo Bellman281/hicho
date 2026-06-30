@@ -1037,6 +1037,7 @@ dependencies = [
  "axum",
  "http-body-util",
  "rand",
+ "redis",
  "serde",
  "serde_json",
  "sqlx",
