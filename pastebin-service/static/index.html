@@ -5,69 +5,119 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Zero-Knowledge Pastebin</title>
   <style>
-    body { font-family: system-ui, -apple-system, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; line-height: 1.4; }
-    h1 { font-size: 1.4rem; }
-    textarea { width: 100%; min-height: 12rem; font-family: ui-monospace, monospace; box-sizing: border-box; }
+    :root {
+      --bg: #ffffff; --fg: #111827; --muted: #6b7280; --border: #d1d5db;
+      --accent: #2563eb; --code-bg: #f7f7f9; --ok-bg: #f0fdf4; --ok-border: #86efac;
+      --tok-comment: #6a9955; --tok-string: #a31515; --tok-number: #098658; --tok-keyword: #0000ff;
+    }
+    html[data-theme="dark"] {
+      --bg: #0f172a; --fg: #e5e7eb; --muted: #94a3b8; --border: #334155;
+      --accent: #60a5fa; --code-bg: #111827; --ok-bg: #052e1a; --ok-border: #14532d;
+      --tok-comment: #6a9955; --tok-string: #ce9178; --tok-number: #b5cea8; --tok-keyword: #569cd6;
+    }
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 760px; margin: 1.5rem auto;
+           padding: 0 1rem; line-height: 1.45; background: var(--bg); color: var(--fg); }
+    h1 { font-size: 1.4rem; margin: 0; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+    header .controls { display: flex; gap: .5rem; align-items: center; }
+    textarea { width: 100%; min-height: 12rem; box-sizing: border-box; font-family: ui-monospace, monospace;
+               background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: .5rem; }
+    select, input[type="password"] { background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+               border-radius: 5px; padding: .25rem .4rem; }
+    button { padding: .5rem 1rem; border: 1px solid var(--border); border-radius: 6px; background: var(--accent);
+             color: #fff; cursor: pointer; }
+    button.ghost { background: transparent; color: var(--fg); }
     .row { margin: .6rem 0; }
     .hidden { display: none; }
+    .muted { color: var(--muted); font-size: .85rem; }
+    #result { background: var(--ok-bg); border: 1px solid var(--ok-border); border-radius: 6px; padding: .75rem; }
     #link a { word-break: break-all; }
-    pre { background: #f5f5f5; padding: 1rem; overflow: auto; white-space: pre-wrap; word-break: break-word; }
-    .muted { color: #666; font-size: .85rem; }
-    button { padding: .5rem 1rem; }
+    #qr { margin-top: .6rem; }
+    #qr img { image-rendering: pixelated; border: 4px solid #fff; border-radius: 4px; }
+    pre { background: var(--code-bg); padding: 1rem; overflow: auto; white-space: pre-wrap; word-break: break-word; border-radius: 6px; }
+    .tok-comment { color: var(--tok-comment); font-style: italic; }
+    .tok-string  { color: var(--tok-string); }
+    .tok-number  { color: var(--tok-number); }
+    .tok-keyword { color: var(--tok-keyword); font-weight: 600; }
   </style>
+  <script>
+    // Set the theme before paint to avoid a flash.
+    (function () {
+      var saved = null;
+      try { saved = localStorage.getItem("theme"); } catch (e) {}
+      var dark = saved ? saved === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+      document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+    })();
+  </script>
 </head>
 <body>
-  <h1>Zero-Knowledge Pastebin</h1>
-  <p class="muted">
-    Text is encrypted in your browser with AES-256-GCM. The decryption key lives
-    in the link's <code>#fragment</code> and is never sent to the server, so the
-    server only ever stores ciphertext.
+  <header>
+    <h1 data-i18n="title">Zero-Knowledge Pastebin</h1>
+    <div class="controls">
+      <select id="lang" aria-label="Language"></select>
+      <button id="themeBtn" class="ghost" type="button" title="Toggle theme">🌓</button>
+    </div>
+  </header>
+  <p class="muted" data-i18n="subtitle">
+    Encrypted in your browser with AES-256-GCM. The key lives in the link fragment and is never sent to the server.
   </p>
 
   <section id="create">
+    <div class="row"><textarea id="content" data-i18n-ph="contentPh" placeholder="Paste your text here…"></textarea></div>
     <div class="row">
-      <textarea id="content" placeholder="Paste your text here…"></textarea>
+      <label><span data-i18n="syntaxLabel">Language</span>:
+        <select id="syntax">
+          <option value="" data-i18n="synPlain">Plain text</option>
+          <option value="rust">Rust</option>
+          <option value="javascript">JavaScript</option>
+          <option value="python">Python</option>
+          <option value="json">JSON</option>
+          <option value="sql">SQL</option>
+          <option value="bash">Bash</option>
+          <option value="c">C / C++ / Java</option>
+        </select>
+      </label>
     </div>
     <div class="row">
-      <label>Expiry:
+      <label><span data-i18n="expiryLabel">Expiry</span>:
         <select id="ttl">
-          <option value="">never</option>
-          <option value="3600">1 hour</option>
-          <option value="86400">1 day</option>
-          <option value="604800">1 week</option>
+          <option value="" data-i18n="ttlNever">never</option>
+          <option value="3600" data-i18n="ttl1h">1 hour</option>
+          <option value="86400" data-i18n="ttl1d">1 day</option>
+          <option value="604800" data-i18n="ttl1w">1 week</option>
         </select>
       </label>
       &nbsp;
-      <label><input type="checkbox" id="oneshot"> burn after reading</label>
+      <label><input type="checkbox" id="oneshot"> <span data-i18n="burnLabel">burn after reading</span></label>
     </div>
     <div class="row">
-      <label>Password (optional):
-        <input type="password" id="password" placeholder="leave empty for none" autocomplete="new-password">
+      <label><span data-i18n="passwordLabel">Password (optional)</span>:
+        <input type="password" id="password" data-i18n-ph="passwordPh" placeholder="leave empty for none" autocomplete="new-password">
       </label>
-      <div class="muted">If set, the password is required <em>in addition</em> to the link — share it separately.</div>
+      <div class="muted" data-i18n="passwordHint">If set, required in addition to the link — share it separately.</div>
     </div>
-    <div class="row">
-      <button id="createBtn" type="button">Encrypt &amp; create</button>
-    </div>
+    <div class="row"><button id="createBtn" type="button" data-i18n="createBtn">Encrypt &amp; create</button></div>
     <div class="row hidden" id="result">
-      <strong>Share this link</strong> (keep the part after <code>#</code> secret):
+      <strong data-i18n="resultLabel">Share this link (keep the part after # secret):</strong>
       <div id="link"></div>
-      <div class="muted hidden" id="pwNote">This paste is password-protected — share the password separately.</div>
+      <div id="qr"></div>
+      <div class="muted hidden" id="pwNote" data-i18n="pwNote">Password-protected — share the password separately.</div>
     </div>
   </section>
 
   <section id="view" class="hidden">
-    <div id="error" class="row" style="color:#b00000"></div>
+    <div id="error" class="row" style="color:#dc2626"></div>
     <div id="pwPrompt" class="row hidden">
-      This paste is password-protected.
-      <input type="password" id="viewPassword" placeholder="password" autocomplete="off">
-      <button id="unlockBtn" type="button">Unlock</button>
+      <span data-i18n="pwPrompt">This paste is password-protected.</span>
+      <input type="password" id="viewPassword" data-i18n-ph="viewPasswordPh" placeholder="password" autocomplete="off">
+      <button id="unlockBtn" type="button" data-i18n="unlockBtn">Unlock</button>
     </div>
-    <pre id="output"></pre>
-    <p class="muted">Decrypted locally in your browser.</p>
-    <p class="row"><a href="/">Create a new paste</a></p>
+    <pre><code id="output"></code></pre>
+    <p class="muted" data-i18n="decryptedNote">Decrypted locally in your browser.</p>
+    <p class="row"><a href="/" data-i18n="newPaste">Create a new paste</a></p>
   </section>
 
+  <script src="/vendor/qrcode.js"></script>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

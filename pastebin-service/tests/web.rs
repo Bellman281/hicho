@@ -65,3 +65,11 @@ async fn serves_app_js_as_javascript() {
     assert!(body.contains("AES-GCM"));
     assert!(body.contains("PBKDF2"));
 }
+
+#[tokio::test]
+async fn serves_vendored_qrcode_lib() {
+    let (status, content_type, body) = get("/vendor/qrcode.js").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(content_type.unwrap().contains("javascript"));
+    assert!(body.contains("QR Code Generator")); // header of the vendored lib
+}

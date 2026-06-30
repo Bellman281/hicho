@@ -32,6 +32,10 @@ use crate::AppState;
 /// browser and the key travels only in the URL fragment.
 const INDEX_HTML: &str = include_str!("../../static/index.html");
 const APP_JS: &str = include_str!("../../static/app.js");
+/// Vendored QR-code generator (qrcode-generator, MIT, © Kazuhiko Arase). Served
+/// locally so QR codes are generated in-browser — the share link (with its key
+/// fragment) never goes to a third party.
+const QRCODE_JS: &str = include_str!("../../static/vendor/qrcode.js");
 
 /// Bridge application errors to HTTP. The only place that knows both vocabularies.
 impl From<ServiceError> for AppError {
@@ -65,6 +69,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/app.js", get(app_js))
+        .route("/vendor/qrcode.js", get(qrcode_js))
         .route("/health", get(health))
         .route("/health/ready", get(ready))
         .route("/api/pastes", post(create_paste))
@@ -176,7 +181,17 @@ async fn index() -> Html<&'static str> {
 
 /// Serve the client script with a JavaScript content type.
 async fn app_js() -> Response {
-    let mut response = Response::new(Body::from(APP_JS));
+    javascript(APP_JS)
+}
+
+/// Serve the vendored QR-code generator.
+async fn qrcode_js() -> Response {
+    javascript(QRCODE_JS)
+}
+
+/// Build a `200 application/javascript` response for a static script.
+fn javascript(body: &'static str) -> Response {
+    let mut response = Response::new(Body::from(body));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/javascript; charset=utf-8"),

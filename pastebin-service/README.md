@@ -58,9 +58,23 @@ How it works:
 - ⚠️ **Access logs** can reveal *who* fetched a paste (not *what*).
 
 This is the same model as [PrivateBin](https://github.com/PrivateBin/PrivateBin).
-We already match its core security model (client-side AES-256-GCM, key in the URL
-fragment, optional password, TTL, burn-after-read). Remaining roadmap items are
-**client-side syntax highlighting** and a **QR code** for share links.
+Beyond the core security model (client-side AES-256-GCM, key in the URL fragment,
+optional password, TTL, burn-after-read), the web client also offers:
+
+- **Syntax highlighting** — choose a language on create; the hint is encrypted
+  *inside* the payload (`{text, syntax}`), so the server never even learns the
+  language. Highlighting is a small, dependency-free, XSS-safe pass applied on
+  view.
+- **QR code** of the share link — generated **in the browser** via a vendored
+  [`qrcode-generator`](https://github.com/kazuhikoarase/qrcode-generator) (MIT,
+  in `static/vendor/`), so the link (with its key fragment) never reaches a third
+  party.
+- **Internationalization** — UI in English / Spanish / French / German with
+  automatic browser-language detection and a manual selector.
+- **Dark mode** — follows the system preference, with a toggle.
+
+Out of scope for this minimalist tool: file upload, comments/discussions, and
+extra themes/translations.
 
 ## Planned endpoints
 
