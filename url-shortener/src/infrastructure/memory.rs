@@ -39,10 +39,10 @@ impl LinkRepository for InMemoryLinkRepository {
         Ok(self.guard().get(code.as_str()).cloned())
     }
 
-    async fn increment_hits(&self, code: &ShortCode) -> Result<bool, RepoError> {
+    async fn increment_hits_by(&self, code: &ShortCode, n: i64) -> Result<bool, RepoError> {
         match self.guard().get_mut(code.as_str()) {
             Some(link) => {
-                link.hits += 1;
+                link.hits += n;
                 Ok(true)
             }
             None => Ok(false),
@@ -88,5 +88,16 @@ mod tests {
         assert_eq!(repo.get(&code).await.unwrap().unwrap().hits, 1);
         assert!(repo.delete(&code).await.unwrap());
         assert!(!repo.delete(&code).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn increment_hits_by_adds_a_batch_in_one_call() {
+        let repo = InMemoryLinkRepository::default();
+        let code = ShortCode::parse("abc").unwrap();
+        assert!(!repo.increment_hits_by(&code, 5).await.unwrap()); // absent
+        repo.insert(&sample()).await.unwrap();
+        assert!(repo.increment_hits_by(&code, 5).await.unwrap());
+        repo.increment_hits(&code).await.unwrap(); // default delegates to +1
+        assert_eq!(repo.get(&code).await.unwrap().unwrap().hits, 6);
     }
 }

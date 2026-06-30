@@ -12,6 +12,7 @@ pub mod cache;
 pub mod config;
 pub mod domain;
 pub mod error;
+pub mod hits;
 pub mod infrastructure;
 pub mod rate_limit;
 
@@ -25,6 +26,7 @@ pub use error::AppError;
 use application::LinkService;
 use cache::{Cache, NoOpCache};
 use domain::LinkRepository;
+use hits::HitRecorder;
 use rate_limit::RateLimiter;
 
 /// Shared, read-only application state injected into every handler.
@@ -55,6 +57,21 @@ pub fn build_app_with_cache(
 ) -> Router {
     let rate_limiter = RateLimiter::new(config.rate_limit_rps, config.rate_limit_burst);
     let service = LinkService::with_cache(repo, config.blocked_hosts.clone(), cache);
+    let state = Arc::new(AppState { config, service, rate_limiter });
+    api::router(state)
+}
+
+/// Like [`build_app_with_cache`] but with an explicit hit recorder. The
+/// composition root passes a [`hits::BatchingHitRecorder`] so redirects only
+/// enqueue a hit and a background task batches the database writes.
+pub fn build_app_with_cache_and_hits(
+    config: Config,
+    repo: Arc<dyn LinkRepository>,
+    cache: Arc<dyn Cache>,
+    hits: Arc<dyn HitRecorder>,
+) -> Router {
+    let rate_limiter = RateLimiter::new(config.rate_limit_rps, config.rate_limit_burst);
+    let service = LinkService::with_cache_and_hits(repo, config.blocked_hosts.clone(), cache, hits);
     let state = Arc::new(AppState { config, service, rate_limiter });
     api::router(state)
 }

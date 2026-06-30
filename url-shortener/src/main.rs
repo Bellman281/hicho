@@ -11,8 +11,9 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use url_shortener::cache::{Cache, NoOpCache, RedisCache};
 use url_shortener::domain::LinkRepository;
+use url_shortener::hits::{BatchingHitRecorder, HitRecorder};
 use url_shortener::infrastructure::SqliteLinkRepository;
-use url_shortener::{build_app_with_cache, Config};
+use url_shortener::{build_app_with_cache_and_hits, Config};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -36,7 +37,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
 
     let cache = build_cache().await;
-    let app = build_app_with_cache(config, repo, cache);
+
+    // Redirect hits are recorded through a background batcher: each redirect
+    // only enqueues its code (a non-blocking channel send), and one task
+    // coalesces them into periodic `hits = hits + n` writes. This keeps the hot
+    // path off the database write lock.
+    let (hit_recorder, hits_task) = BatchingHitRecorder::spawn_default(repo.clone());
+    let hits: Arc<dyn HitRecorder> = hit_recorder.clone();
+    let app = build_app_with_cache_and_hits(config, repo, cache, hits);
 
     let listener = TcpListener::bind(bind_addr).await?;
     tracing::info!(%bind_addr, "url-shortener listening");
@@ -49,6 +57,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     )
     .with_graceful_shutdown(shutdown_signal())
     .await?;
+
+    // Graceful shutdown: the server has stopped accepting requests, so flush any
+    // buffered hit counts before exit (no lost counts), then stop the task.
+    hit_recorder.flush().await;
+    hits_task.abort();
 
     Ok(())
 }

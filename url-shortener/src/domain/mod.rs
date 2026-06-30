@@ -177,8 +177,17 @@ pub trait LinkRepository: Send + Sync + 'static {
     /// Fetch a link by code, or `None` if it does not exist.
     async fn get(&self, code: &ShortCode) -> Result<Option<Link>, RepoError>;
 
-    /// Increment the hit counter; returns `true` if a row was updated.
-    async fn increment_hits(&self, code: &ShortCode) -> Result<bool, RepoError>;
+    /// Increment the hit counter by `n` (`n >= 0`); returns `true` if a row was
+    /// updated. This is the primitive the batched hit-counter writes through, so
+    /// many coalesced hits become a single `hits = hits + n` update.
+    async fn increment_hits_by(&self, code: &ShortCode, n: i64) -> Result<bool, RepoError>;
+
+    /// Increment the hit counter by one. Provided in terms of
+    /// [`increment_hits_by`](Self::increment_hits_by) so adapters implement only
+    /// the batched form.
+    async fn increment_hits(&self, code: &ShortCode) -> Result<bool, RepoError> {
+        self.increment_hits_by(code, 1).await
+    }
 
     /// Delete a link; returns `true` if a row was removed.
     async fn delete(&self, code: &ShortCode) -> Result<bool, RepoError>;

@@ -13,6 +13,7 @@ use crate::cache::{Cache, NoOpCache};
 use crate::domain::{
     BoxedError, Link, LinkRepository, RepoError, ShortCode, TargetUrl, ValidationError,
 };
+use crate::hits::{HitRecorder, ImmediateHitRecorder};
 
 /// Length of an auto-generated short code.
 const GENERATED_CODE_LEN: usize = 7;
@@ -55,6 +56,9 @@ pub struct LinkService {
     blocked_hosts: Vec<String>,
     /// Read-cache for the hot redirect path (NoOp when disabled).
     cache: Arc<dyn Cache>,
+    /// Where redirect hits are recorded. Immediate by default; the composition
+    /// root swaps in a channel-backed batcher for production.
+    hits: Arc<dyn HitRecorder>,
 }
 
 impl LinkService {
@@ -63,13 +67,28 @@ impl LinkService {
         Self::with_cache(repo, blocked_hosts, Arc::new(NoOpCache))
     }
 
-    /// Construct with an explicit cache implementation.
+    /// Construct with an explicit cache and the default (immediate) hit
+    /// recorder — one DB write per hit. Keeps counts exact, which is convenient
+    /// for tests and single-instance runs.
     pub fn with_cache(
         repo: Arc<dyn LinkRepository>,
         blocked_hosts: Vec<String>,
         cache: Arc<dyn Cache>,
     ) -> Self {
-        Self { repo, blocked_hosts, cache }
+        let hits: Arc<dyn HitRecorder> = Arc::new(ImmediateHitRecorder::new(repo.clone()));
+        Self { repo, blocked_hosts, cache, hits }
+    }
+
+    /// Construct with an explicit cache *and* hit recorder. Production passes a
+    /// [`crate::hits::BatchingHitRecorder`] so redirects only enqueue a hit
+    /// (non-blocking) and a background task batches the DB writes.
+    pub fn with_cache_and_hits(
+        repo: Arc<dyn LinkRepository>,
+        blocked_hosts: Vec<String>,
+        cache: Arc<dyn Cache>,
+        hits: Arc<dyn HitRecorder>,
+    ) -> Self {
+        Self { repo, blocked_hosts, cache, hits }
     }
 
     /// True if `target`'s host is on the denylist (exact host or a subdomain).
@@ -130,7 +149,7 @@ impl LinkService {
         // Cache-aside: a cached entry is a live, non-expired target (we cap the
         // TTL and invalidate on delete). The hit is still counted best-effort.
         if let Some(target) = self.cache.get(code.as_str()).await {
-            let _ = self.repo.increment_hits(&code).await;
+            self.hits.record(code).await; // non-blocking enqueue (or immediate)
             return Ok(TargetUrl::from_trusted(target));
         }
 
@@ -145,7 +164,9 @@ impl LinkService {
         if ttl > 0 {
             self.cache.set(code.as_str(), link.target.as_str(), ttl).await;
         }
-        self.repo.increment_hits(&code).await?;
+        // Counting a hit must never fail (or block) a redirect, so it is
+        // best-effort and fire-and-forget — not propagated with `?`.
+        self.hits.record(code).await;
         Ok(link.target)
     }
 

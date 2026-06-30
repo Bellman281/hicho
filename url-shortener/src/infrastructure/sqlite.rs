@@ -108,8 +108,9 @@ impl LinkRepository for SqliteLinkRepository {
         }))
     }
 
-    async fn increment_hits(&self, code: &ShortCode) -> Result<bool, RepoError> {
-        let result = sqlx::query("UPDATE links SET hits = hits + 1 WHERE code = ?")
+    async fn increment_hits_by(&self, code: &ShortCode, n: i64) -> Result<bool, RepoError> {
+        let result = sqlx::query("UPDATE links SET hits = hits + ? WHERE code = ?")
+            .bind(n)
             .bind(code.as_str())
             .execute(&self.pool)
             .await
@@ -166,6 +167,10 @@ mod tests {
 
         assert!(repo.increment_hits(&code).await.unwrap());
         assert_eq!(repo.get(&code).await.unwrap().unwrap().hits, 1);
+
+        // Batched increment writes `hits = hits + n` in a single statement.
+        assert!(repo.increment_hits_by(&code, 9).await.unwrap());
+        assert_eq!(repo.get(&code).await.unwrap().unwrap().hits, 10);
 
         assert!(repo.delete(&code).await.unwrap());
         assert!(repo.get(&code).await.unwrap().is_none());
