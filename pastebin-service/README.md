@@ -1,25 +1,56 @@
 # Pastebin Service
 
-A clean, layered pastebin REST API (Axum + SQLite/sqlx), sharing the URL
-shortener's hexagonal architecture. Stores text snippets ("pastes") and serves
-them back by id, with planned expiry (TTL), burn-after-read, and size limits.
+A clean, layered, **zero-knowledge** pastebin REST API (Axum + SQLite/sqlx) with
+a tiny browser client that encrypts and decrypts in-page. Stores text snippets
+("pastes") and serves them back by id, with TTL expiry, burn-after-read, content
+size limits, optional per-IP rate limiting, and an optional Redis read-cache.
 
-> Status: **functional through PR #5** — create / fetch / raw / delete over
-> SQLite, with TTL expiry, burn-after-read, and content size limits. Roadmap and
-> per-PR test cases: [`../docs/PR_PLAN_pastebin.md`](../docs/PR_PLAN_pastebin.md).
-> Architecture: [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
+> **One of two independent services in this repo** — see the
+> [repository README](../README.md) for how it relates to the URL shortener and
+> for the shared hexagonal architecture. This service has no shared code or
+> database with the other; it just lives in the same Cargo workspace.
+>
+> Architecture: [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md) ·
+> Roadmap & per-PR test cases: [`../docs/PR_PLAN_pastebin.md`](../docs/PR_PLAN_pastebin.md).
 
 ## Zero-knowledge web client
 
-The server also serves a tiny browser client (`GET /`, `GET /app.js`) that
-encrypts and decrypts **in the browser** with AES-256-GCM (WebCrypto). The
-random key is base64url-encoded into the link's `#fragment`, which browsers
-never send to the server — so the server only ever stores ciphertext and has
-**zero knowledge** of the plaintext or key. Burn-after-read and TTL apply as
-usual. Share links look like `https://host/#<id>.<key>`.
+The server serves a tiny browser client (`GET /` and `GET /app.js`, embedded in
+the binary via `include_str!`) that does all cryptography **in the browser** with
+**256-bit AES-GCM** (authenticated encryption, via the WebCrypto API). The server
+side is unchanged by this — it stores the ciphertext as opaque content and never
+learns it is encrypted. That is the whole trick: *zero knowledge is a client
+property, achieved by never sending the key to the server.*
 
-Limitations to know: you must trust the server to serve honest JS; there's no
-password/PBKDF2 layer (the key is the URL fragment); use HTTPS in production.
+How it works:
+
+1. **Create** — the browser generates a random 256-bit key, encrypts the text
+   with a fresh random IV, and POSTs `base64(iv).base64(ciphertext)` to
+   `POST /api/pastes` as ordinary content. The key is base64url-encoded into the
+   link **fragment**: `https://host/#<id>.<key>`.
+2. **The `#fragment` is never sent to the server** by browsers, so the server
+   cannot see the key — only the ciphertext it stored.
+3. **View** — opening the link loads the page; the client reads `id` and `key`
+   from the fragment, fetches the ciphertext (`GET /raw/<id>`), and decrypts it
+   locally. Burn-after-read (`one_shot`) and TTL apply as usual.
+
+### Threat model (please read before trusting it with secrets)
+
+- ✅ **Server breach / subpoena** reveals only ciphertext — the operator has
+  plausible deniability over paste contents.
+- ✅ **Burn-after-read & TTL** bound how long a secret can exist.
+- ⚠️ **You must trust the server to serve honest JavaScript.** A malicious or
+  compromised server could ship code that exfiltrates the key. Always use
+  **HTTPS** (ideally with HSTS); don't open links from an instance you suspect is
+  compromised.
+- ⚠️ **Anyone with the full link can read the paste** — the key *is* in the URL
+  fragment, and there is **no password layer yet**. Share links privately.
+- ⚠️ **Access logs** can reveal *who* fetched a paste (not *what*).
+
+This is the same model as [PrivateBin](https://github.com/PrivateBin/PrivateBin);
+see the [repository README](../README.md#ideas-borrowed-from--inspired-by-privatebin)
+for a feature comparison and roadmap (the top items being **password protection**
+and **client-side syntax highlighting**).
 
 ## Planned endpoints
 

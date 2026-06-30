@@ -5,8 +5,13 @@ A production-minded URL shortener REST API in **Rust**, built on **Axum** with
 adapters) architecture** with a strict inward-pointing dependency rule, so the
 business logic is framework- and database-agnostic and fully unit-testable.
 
-> Status: functional through PR #5, with SQLite concurrency tuning (WAL +
-> `busy_timeout`) applied. Roadmap: [`../docs/PR_PLAN_url_shortener.md`](../docs/PR_PLAN_url_shortener.md).
+> **One of two independent services in this repo** — see the
+> [repository README](../README.md) for how it relates to the pastebin service
+> and for the shared architecture. No shared code or database between them.
+>
+> Status: **complete** — full CRUD + redirect, TTL expiry, host blocklist,
+> hardening middleware, opt-in per-IP rate limiting, and an optional Redis
+> read-cache. Roadmap: [`../docs/PR_PLAN_url_shortener.md`](../docs/PR_PLAN_url_shortener.md) ·
 > Scaling deep-dive: [`../docs/SCALING.md`](../docs/SCALING.md).
 
 ## Endpoints
