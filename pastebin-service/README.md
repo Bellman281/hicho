@@ -41,6 +41,15 @@ curl -X DELETE http://127.0.0.1:8090/api/pastes/Ab3xY7q2   # 204
 A `one_shot` paste is deleted on its first fetch (burn-after-read); a paste with
 `ttl_seconds` becomes `404` once expired.
 
+## Hardening
+
+Every request passes through a middleware stack (outer → inner): `tower_http`
+TraceLayer (per-request logs — `RUST_LOG=info,tower_http=debug`), CatchPanicLayer
+(panic → `500`), TimeoutLayer (`REQUEST_TIMEOUT_SECS` → `408`),
+ConcurrencyLimitLayer (`MAX_CONCURRENT_REQUESTS`), and the body-size limit.
+`/health` is dependency-free liveness; `/health/ready` checks the DB (`503` when
+unreachable). Shutdown is graceful so the pool drains.
+
 ## Quality gates
 
 ```bash

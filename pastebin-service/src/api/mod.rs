@@ -5,6 +5,7 @@
 //! that knows about both HTTP and the application.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Path, State};
@@ -13,6 +14,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
+use tower::limit::ConcurrencyLimitLayer;
+use tower::ServiceBuilder;
+use tower_http::catch_panic::CatchPanicLayer;
+use tower_http::timeout::TimeoutLayer;
+use tower_http::trace::TraceLayer;
 
 use crate::application::ServiceError;
 use crate::domain::Paste;
@@ -33,7 +39,20 @@ impl From<ServiceError> for AppError {
 
 /// Build the application router from shared, injected state.
 pub fn router(state: Arc<AppState>) -> Router {
+    // Copy primitives out before `state` is moved into `.with_state`.
     let body_limit = state.config.max_body_bytes;
+    let timeout = Duration::from_secs(state.config.request_timeout_secs);
+    let max_concurrent = state.config.max_concurrent_requests;
+
+    // Outside-in: trace wraps everything, CatchPanic turns a handler panic into
+    // a 500, Timeout bounds slow requests (408), ConcurrencyLimit caps in-flight
+    // work, and the body limit guards per-request memory.
+    let middleware = ServiceBuilder::new()
+        .layer(TraceLayer::new_for_http())
+        .layer(CatchPanicLayer::new())
+        .layer(TimeoutLayer::new(timeout))
+        .layer(ConcurrencyLimitLayer::new(max_concurrent))
+        .layer(DefaultBodyLimit::max(body_limit));
 
     Router::new()
         .route("/health", get(health))
@@ -41,7 +60,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/pastes", post(create_paste))
         .route("/api/pastes/:id", get(get_paste).delete(delete_paste))
         .route("/raw/:id", get(raw_paste))
-        .layer(DefaultBodyLimit::max(body_limit))
+        .layer(middleware)
         .with_state(state)
 }
 
