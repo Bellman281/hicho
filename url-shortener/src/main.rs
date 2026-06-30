@@ -33,7 +33,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let bind_addr = config.bind_addr;
 
     let repo: Arc<dyn LinkRepository> = Arc::new(
-        SqliteLinkRepository::connect(&config.database_url, config.database_max_connections).await?,
+        SqliteLinkRepository::connect(&config.database_url, config.database_max_connections)
+            .await?,
     );
 
     let cache = build_cache().await;

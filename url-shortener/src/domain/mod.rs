@@ -135,7 +135,13 @@ pub struct Link {
 impl Link {
     /// Create a brand-new link with zero hits and no expiry.
     pub fn new(code: ShortCode, target: TargetUrl, created_at: i64) -> Self {
-        Self { code, target, created_at, hits: 0, expires_at: None }
+        Self {
+            code,
+            target,
+            created_at,
+            hits: 0,
+            expires_at: None,
+        }
     }
 
     /// Create a brand-new link with zero hits and an optional expiry.
@@ -145,7 +151,13 @@ impl Link {
         created_at: i64,
         expires_at: Option<i64>,
     ) -> Self {
-        Self { code, target, created_at, hits: 0, expires_at }
+        Self {
+            code,
+            target,
+            created_at,
+            hits: 0,
+            expires_at,
+        }
     }
 
     /// True if the link has an expiry that is at or before `now` (Unix seconds).

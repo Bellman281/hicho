@@ -6,9 +6,7 @@
 //! no leaked connections. Queries use the runtime API (not the compile-time
 //! `query!` macros) so the build needs no live database or offline metadata.
 
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
-};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{Row, SqlitePool};
 use std::str::FromStr;
 use std::time::Duration;
@@ -128,7 +126,10 @@ impl LinkRepository for SqliteLinkRepository {
     }
 
     async fn ping(&self) -> Result<(), RepoError> {
-        sqlx::query("SELECT 1").execute(&self.pool).await.map_err(backend)?;
+        sqlx::query("SELECT 1")
+            .execute(&self.pool)
+            .await
+            .map_err(backend)?;
         Ok(())
     }
 }
@@ -159,7 +160,10 @@ mod tests {
         let code = ShortCode::parse("abc123").unwrap();
 
         repo.insert(&sample()).await.unwrap();
-        assert!(matches!(repo.insert(&sample()).await, Err(RepoError::Conflict)));
+        assert!(matches!(
+            repo.insert(&sample()).await,
+            Err(RepoError::Conflict)
+        ));
 
         let fetched = repo.get(&code).await.unwrap().unwrap();
         assert_eq!(fetched.target.as_str(), "https://example.com/x");

@@ -76,7 +76,12 @@ impl LinkService {
         cache: Arc<dyn Cache>,
     ) -> Self {
         let hits: Arc<dyn HitRecorder> = Arc::new(ImmediateHitRecorder::new(repo.clone()));
-        Self { repo, blocked_hosts, cache, hits }
+        Self {
+            repo,
+            blocked_hosts,
+            cache,
+            hits,
+        }
     }
 
     /// Construct with an explicit cache *and* hit recorder. Production passes a
@@ -88,7 +93,12 @@ impl LinkService {
         cache: Arc<dyn Cache>,
         hits: Arc<dyn HitRecorder>,
     ) -> Self {
-        Self { repo, blocked_hosts, cache, hits }
+        Self {
+            repo,
+            blocked_hosts,
+            cache,
+            hits,
+        }
     }
 
     /// True if `target`'s host is on the denylist (exact host or a subdomain).
@@ -162,7 +172,9 @@ impl LinkService {
 
         let ttl = cache_ttl_secs(&link);
         if ttl > 0 {
-            self.cache.set(code.as_str(), link.target.as_str(), ttl).await;
+            self.cache
+                .set(code.as_str(), link.target.as_str(), ttl)
+                .await;
         }
         // Counting a hit must never fail (or block) a redirect, so it is
         // best-effort and fire-and-forget — not propagated with `?`.
@@ -249,16 +261,29 @@ mod tests {
         let cache = Arc::new(InMemoryCache::default());
         let svc = LinkService::with_cache(repo.clone(), Vec::new(), cache.clone());
 
-        svc.create("https://example.com".to_owned(), Some("xy".to_owned()), None)
-            .await
-            .unwrap();
+        svc.create(
+            "https://example.com".to_owned(),
+            Some("xy".to_owned()),
+            None,
+        )
+        .await
+        .unwrap();
 
         // First resolve is a cache miss that populates the cache.
-        assert_eq!(svc.resolve("xy".to_owned()).await.unwrap().as_str(), "https://example.com");
-        assert_eq!(cache.get("xy").await.as_deref(), Some("https://example.com"));
+        assert_eq!(
+            svc.resolve("xy".to_owned()).await.unwrap().as_str(),
+            "https://example.com"
+        );
+        assert_eq!(
+            cache.get("xy").await.as_deref(),
+            Some("https://example.com")
+        );
 
         // A second resolve is served from cache (still returns the right target).
-        assert_eq!(svc.resolve("xy".to_owned()).await.unwrap().as_str(), "https://example.com");
+        assert_eq!(
+            svc.resolve("xy".to_owned()).await.unwrap().as_str(),
+            "https://example.com"
+        );
 
         // Delete invalidates the cache entry.
         svc.delete("xy".to_owned()).await.unwrap();
@@ -311,7 +336,11 @@ mod tests {
     async fn resolve_increments_hits_and_returns_target() {
         let svc = service();
         let link = svc
-            .create("https://example.com".to_owned(), Some("xy".to_owned()), None)
+            .create(
+                "https://example.com".to_owned(),
+                Some("xy".to_owned()),
+                None,
+            )
             .await
             .unwrap();
         let target = svc.resolve(link.code.as_str().to_owned()).await.unwrap();
@@ -359,7 +388,11 @@ mod tests {
     async fn create_with_ttl_sets_future_expiry_and_resolves() {
         let svc = service();
         let link = svc
-            .create("https://example.com".to_owned(), Some("ttl".to_owned()), Some(3600))
+            .create(
+                "https://example.com".to_owned(),
+                Some("ttl".to_owned()),
+                Some(3600),
+            )
             .await
             .unwrap();
         assert!(link.expires_at.is_some());
@@ -374,11 +407,13 @@ mod tests {
 
         // Exact host and a subdomain are both blocked.
         assert!(matches!(
-            svc.create("https://evil.com/x".to_owned(), None, None).await,
+            svc.create("https://evil.com/x".to_owned(), None, None)
+                .await,
             Err(ServiceError::Blocked)
         ));
         assert!(matches!(
-            svc.create("https://sub.evil.com/x".to_owned(), None, None).await,
+            svc.create("https://sub.evil.com/x".to_owned(), None, None)
+                .await,
             Err(ServiceError::Blocked)
         ));
         // A different host is allowed (note: "notevil.com" must NOT match).
