@@ -5,5 +5,7 @@
 //! - `SqlitePasteRepository` — the production sqlx adapter (PR #4).
 
 mod memory;
+mod sqlite;
 
 pub use memory::InMemoryPasteRepository;
+pub use sqlite::SqlitePasteRepository;
