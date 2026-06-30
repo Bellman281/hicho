@@ -8,6 +8,7 @@
 
 pub mod api;
 pub mod application;
+pub mod cache;
 pub mod config;
 pub mod domain;
 pub mod error;
@@ -22,6 +23,7 @@ pub use config::Config;
 pub use error::AppError;
 
 use application::PasteService;
+use cache::{Cache, NoOpCache};
 use domain::PasteRepository;
 use rate_limit::RateLimiter;
 
@@ -41,8 +43,17 @@ pub struct AppState {
 /// Inversion): production passes the SQLite adapter, tests pass the in-memory
 /// double — neither this function nor the handlers change.
 pub fn build_app(config: Config, repo: Arc<dyn PasteRepository>) -> Router {
+    build_app_with_cache(config, repo, Arc::new(NoOpCache))
+}
+
+/// Like [`build_app`] but with an explicit read-cache (e.g. Redis in production).
+pub fn build_app_with_cache(
+    config: Config,
+    repo: Arc<dyn PasteRepository>,
+    cache: Arc<dyn Cache>,
+) -> Router {
     let rate_limiter = RateLimiter::new(config.rate_limit_rps, config.rate_limit_burst);
-    let service = PasteService::new(repo);
+    let service = PasteService::with_cache(repo, cache);
     let state = Arc::new(AppState { config, service, rate_limiter });
     api::router(state)
 }

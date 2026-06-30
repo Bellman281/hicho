@@ -7,7 +7,9 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 
+use crate::cache::{Cache, NoOpCache};
 use crate::domain::{
     BoxedError, Content, Paste, PasteId, PasteRepository, RepoError, ValidationError,
 };
@@ -16,6 +18,8 @@ use crate::domain::{
 const GENERATED_ID_LEN: usize = 8;
 /// Retry attempts on a (rare) id collision before giving up.
 const MAX_GENERATION_ATTEMPTS: usize = 5;
+/// Upper bound on how long a paste is cached (seconds).
+const MAX_CACHE_TTL_SECS: u64 = 300;
 /// Base62 alphabet for generated ids.
 const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -45,11 +49,19 @@ impl From<RepoError> for ServiceError {
 #[derive(Clone)]
 pub struct PasteService {
     repo: Arc<dyn PasteRepository>,
+    /// Read-cache for the hot fetch path (NoOp when disabled).
+    cache: Arc<dyn Cache>,
 }
 
 impl PasteService {
+    /// Construct with caching disabled (NoOp cache).
     pub fn new(repo: Arc<dyn PasteRepository>) -> Self {
-        Self { repo }
+        Self::with_cache(repo, Arc::new(NoOpCache))
+    }
+
+    /// Construct with an explicit cache implementation.
+    pub fn with_cache(repo: Arc<dyn PasteRepository>, cache: Arc<dyn Cache>) -> Self {
+        Self { repo, cache }
     }
 
     /// Create a paste from `content`, with optional syntax hint, TTL, and
@@ -90,16 +102,39 @@ impl PasteService {
     /// so it maps to `NotFound`.
     pub async fn fetch(&self, id: String) -> Result<Paste, ServiceError> {
         let id = PasteId::parse(id).map_err(|_| ServiceError::NotFound)?;
+
+        // Cache-aside. Only non-one-shot pastes are ever cached, so a cache hit
+        // is always safe to serve (burn-after-read pastes always hit the DB so
+        // they can be deleted).
+        if let Some(json) = self.cache.get(id.as_str()).await {
+            if let Ok(cached) = serde_json::from_str::<CachedPaste>(&json) {
+                let paste = cached.into_paste();
+                if paste.is_expired(now_unix()) {
+                    self.cache.delete(id.as_str()).await;
+                } else {
+                    let _ = self.repo.increment_views(&id).await; // best-effort
+                    return Ok(paste);
+                }
+            }
+        }
+
         let paste = self.repo.get(&id).await?.ok_or(ServiceError::NotFound)?;
 
         if paste.is_expired(now_unix()) {
             let _ = self.repo.delete(&id).await; // best-effort lazy purge
+            self.cache.delete(id.as_str()).await;
             return Err(ServiceError::NotFound);
         }
 
         if paste.one_shot {
-            let _ = self.repo.delete(&id).await; // burn-after-read
+            let _ = self.repo.delete(&id).await; // burn-after-read (never cached)
         } else {
+            let ttl = cache_ttl_secs(&paste);
+            if ttl > 0 {
+                if let Ok(json) = serde_json::to_string(&CachedPaste::from_paste(&paste)) {
+                    self.cache.set(id.as_str(), &json, ttl).await;
+                }
+            }
             self.repo.increment_views(&id).await?;
         }
         Ok(paste)
@@ -108,7 +143,9 @@ impl PasteService {
     /// Delete a paste, or `NotFound` if it does not exist.
     pub async fn delete(&self, id: String) -> Result<(), ServiceError> {
         let id = PasteId::parse(id).map_err(|_| ServiceError::NotFound)?;
-        if self.repo.delete(&id).await? {
+        let removed = self.repo.delete(&id).await?;
+        self.cache.delete(id.as_str()).await; // invalidate regardless
+        if removed {
             Ok(())
         } else {
             Err(ServiceError::NotFound)
@@ -130,6 +167,61 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
+/// Serialized snapshot of a paste for the cache, so the domain types stay
+/// serde-free. Only non-one-shot pastes are ever cached.
+#[derive(Serialize, Deserialize)]
+struct CachedPaste {
+    id: String,
+    content: String,
+    syntax: Option<String>,
+    created_at: i64,
+    expires_at: Option<i64>,
+    one_shot: bool,
+    views: i64,
+}
+
+impl CachedPaste {
+    fn from_paste(p: &Paste) -> Self {
+        Self {
+            id: p.id.as_str().to_owned(),
+            content: p.content.as_str().to_owned(),
+            syntax: p.syntax.clone(),
+            created_at: p.created_at,
+            expires_at: p.expires_at,
+            one_shot: p.one_shot,
+            views: p.views,
+        }
+    }
+
+    fn into_paste(self) -> Paste {
+        Paste {
+            id: PasteId::from_trusted(self.id),
+            content: Content::from_trusted(self.content),
+            syntax: self.syntax,
+            created_at: self.created_at,
+            expires_at: self.expires_at,
+            one_shot: self.one_shot,
+            views: self.views,
+        }
+    }
+}
+
+/// How long to cache a paste: bounded by `MAX_CACHE_TTL_SECS` and never beyond
+/// the paste's own expiry. Returns 0 if already expired (don't cache).
+fn cache_ttl_secs(paste: &Paste) -> u64 {
+    match paste.expires_at {
+        Some(exp) => {
+            let remaining = exp - now_unix();
+            if remaining <= 0 {
+                0
+            } else {
+                (remaining as u64).min(MAX_CACHE_TTL_SECS)
+            }
+        }
+        None => MAX_CACHE_TTL_SECS,
+    }
+}
+
 /// Generate a random base62 id of the given length.
 fn generate_id(len: usize) -> String {
     let mut rng = rand::thread_rng();
@@ -141,11 +233,51 @@ fn generate_id(len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::InMemoryCache;
     use crate::domain::MAX_CONTENT_BYTES;
     use crate::infrastructure::InMemoryPasteRepository;
 
     fn service() -> PasteService {
         PasteService::new(Arc::new(InMemoryPasteRepository::default()))
+    }
+
+    #[tokio::test]
+    async fn fetch_caches_non_one_shot_and_delete_invalidates() {
+        let repo = Arc::new(InMemoryPasteRepository::default());
+        let cache = Arc::new(InMemoryCache::default());
+        let svc = PasteService::with_cache(repo.clone(), cache.clone());
+
+        let p = svc
+            .create("hello".to_owned(), None, None, false)
+            .await
+            .unwrap();
+        // First fetch populates the cache.
+        svc.fetch(p.id.as_str().to_owned()).await.unwrap();
+        assert!(cache.get(p.id.as_str()).await.is_some());
+
+        // Delete invalidates it.
+        svc.delete(p.id.as_str().to_owned()).await.unwrap();
+        assert!(cache.get(p.id.as_str()).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn one_shot_paste_is_never_cached() {
+        let repo = Arc::new(InMemoryPasteRepository::default());
+        let cache = Arc::new(InMemoryCache::default());
+        let svc = PasteService::with_cache(repo.clone(), cache.clone());
+
+        let p = svc
+            .create("secret".to_owned(), None, None, true)
+            .await
+            .unwrap();
+        // Fetch burns it; it must not be cached.
+        svc.fetch(p.id.as_str().to_owned()).await.unwrap();
+        assert!(cache.get(p.id.as_str()).await.is_none());
+        // And it's gone (burned).
+        assert!(matches!(
+            svc.fetch(p.id.as_str().to_owned()).await,
+            Err(ServiceError::NotFound)
+        ));
     }
 
     #[test]

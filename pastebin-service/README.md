@@ -55,6 +55,12 @@ unreachable). Shutdown is graceful so the pool drains.
 bucket; over-limit requests get `429`. Per-instance limit (each replica counts
 independently).
 
+**Redis read-cache** (optional): set `REDIS_URL` to cache fetched pastes, so hot
+reads skip the database. Best-effort with DB fallback when Redis is
+unset/unreachable. **One-shot pastes are never cached** (so burn-after-read
+stays correct); cached entries carry a bounded TTL (≤ the paste's expiry) and are
+invalidated on delete.
+
 ## Quality gates
 
 ```bash
