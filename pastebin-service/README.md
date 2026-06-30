@@ -13,6 +13,11 @@ size limits, optional per-IP rate limiting, and an optional Redis read-cache.
 >
 > Architecture: [`./docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 
+![Zero-Knowledge Pastebin — the in-browser web client](docs/img/ui.svg)
+
+> The image above is a mockup of the actual page (`static/index.html`); drop a
+> real screenshot in `docs/img/` and update the link to replace it.
+
 ## Zero-knowledge web client
 
 The server serves a tiny browser client (`GET /` and `GET /app.js`, embedded in
@@ -21,6 +26,8 @@ the binary via `include_str!`) that does all cryptography **in the browser** wit
 side is unchanged by this — it stores the ciphertext as opaque content and never
 learns it is encrypted. That is the whole trick: *zero knowledge is a client
 property, achieved by never sending the key to the server.*
+
+![How zero knowledge works: the browser encrypts; the server stores only ciphertext; the key stays in the URL fragment](docs/img/zero-knowledge-flow.svg)
 
 How it works:
 

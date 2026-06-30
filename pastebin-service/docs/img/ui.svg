@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 600" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <defs>
+    <style>
+      .muted { fill: #6b7280; }
+      .label { fill: #374151; }
+      .mono  { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    </style>
+  </defs>
+
+  <!-- page backdrop -->
+  <rect width="760" height="600" fill="#eef1f5"/>
+
+  <!-- browser window -->
+  <rect x="24" y="20" width="712" height="560" rx="12" fill="#ffffff" stroke="#d1d5db"/>
+  <!-- title bar -->
+  <rect x="24" y="20" width="712" height="44" rx="12" fill="#f3f4f6"/>
+  <rect x="24" y="52" width="712" height="12" fill="#f3f4f6"/>
+  <circle cx="48" cy="42" r="6" fill="#ef6a5e"/>
+  <circle cx="68" cy="42" r="6" fill="#f5bf4f"/>
+  <circle cx="88" cy="42" r="6" fill="#61c554"/>
+  <!-- address bar -->
+  <rect x="120" y="30" width="592" height="24" rx="12" fill="#ffffff" stroke="#d1d5db"/>
+  <text x="136" y="46" class="mono" font-size="12" fill="#6b7280">https://paste.example/</text>
+
+  <!-- content -->
+  <text x="56" y="104" font-size="22" font-weight="700" fill="#111827">Zero-Knowledge Pastebin</text>
+  <text x="56" y="130" class="muted" font-size="13">Text is encrypted in your browser with AES-256-GCM. The decryption key lives in the</text>
+  <text x="56" y="148" class="muted" font-size="13">link's #fragment and is never sent to the server — it only ever stores ciphertext.</text>
+
+  <!-- textarea -->
+  <rect x="56" y="166" width="648" height="150" rx="6" fill="#fbfbfd" stroke="#d1d5db"/>
+  <text x="70" y="190" class="mono" font-size="12.5" fill="#374151">-----BEGIN OPENSSH PRIVATE KEY-----</text>
+  <text x="70" y="210" class="mono" font-size="12.5" fill="#374151">b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAAB…</text>
+  <text x="70" y="236" class="mono" font-size="12.5" fill="#9ca3af">(this is encrypted in-page before anything is sent)</text>
+
+  <!-- options row -->
+  <text x="56" y="350" class="label" font-size="13">Expiry:</text>
+  <rect x="110" y="336" width="110" height="24" rx="5" fill="#ffffff" stroke="#d1d5db"/>
+  <text x="122" y="353" font-size="12.5" fill="#374151">1 day</text>
+  <text x="206" y="353" class="muted" font-size="11">▾</text>
+  <rect x="252" y="341" width="14" height="14" rx="3" fill="#ffffff" stroke="#9ca3af"/>
+  <path d="M255 348 l3 3 l5 -6" fill="none" stroke="#2563eb" stroke-width="2"/>
+  <text x="274" y="353" class="label" font-size="13">burn after reading</text>
+
+  <!-- password row -->
+  <text x="56" y="392" class="label" font-size="13">Password (optional):</text>
+  <rect x="190" y="378" width="220" height="24" rx="5" fill="#ffffff" stroke="#d1d5db"/>
+  <text x="202" y="395" class="mono" font-size="13" fill="#374151">••••••••••••</text>
+  <text x="56" y="414" class="muted" font-size="11">If set, required in addition to the link — share it separately.</text>
+
+  <!-- button -->
+  <rect x="56" y="436" width="168" height="38" rx="6" fill="#2563eb"/>
+  <text x="140" y="460" font-size="14" font-weight="600" fill="#ffffff" text-anchor="middle">Encrypt &amp; create</text>
+
+  <!-- result -->
+  <rect x="56" y="492" width="648" height="74" rx="6" fill="#f0fdf4" stroke="#86efac"/>
+  <text x="70" y="514" class="label" font-size="12.5" font-weight="600">Share this link (keep the part after # secret):</text>
+  <text x="70" y="536" class="mono" font-size="12" fill="#2563eb">https://paste.example/#QnsFVpLI.XkdybHPgx3BqDRdlnwAkFodQsfW11s9z2Xmz…</text>
+  <text x="70" y="556" class="muted" font-size="11">Password-protected — share the password separately.</text>
+</svg>

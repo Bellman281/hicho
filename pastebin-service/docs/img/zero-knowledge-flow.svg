@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 320" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 z" fill="#6b7280"/>
+    </marker>
+    <style>
+      .title { font-weight: 700; fill: #111827; }
+      .sub   { fill: #6b7280; }
+      .mono  { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    </style>
+  </defs>
+
+  <rect width="820" height="320" fill="#ffffff"/>
+  <text x="32" y="40" font-size="18" class="title">How zero knowledge works</text>
+
+  <!-- browser box -->
+  <rect x="32" y="70" width="300" height="150" rx="10" fill="#eff6ff" stroke="#93c5fd"/>
+  <text x="52" y="100" font-size="14" class="title">Your browser</text>
+  <text x="52" y="124" font-size="12" class="sub">1. random 256-bit key + password</text>
+  <text x="52" y="144" font-size="12" class="sub">2. derive AES key (PBKDF2)</text>
+  <text x="52" y="164" font-size="12" class="sub">3. AES-256-GCM encrypt</text>
+  <text x="52" y="192" font-size="12" class="mono" fill="#1d4ed8">ciphertext = {iv, ct, salt}</text>
+
+  <!-- server box -->
+  <rect x="488" y="70" width="300" height="150" rx="10" fill="#f0fdf4" stroke="#86efac"/>
+  <text x="508" y="100" font-size="14" class="title">Server (Rust + SQLite)</text>
+  <text x="508" y="124" font-size="12" class="sub">stores the ciphertext blob only</text>
+  <text x="508" y="148" font-size="12" class="sub">never sees plaintext,</text>
+  <text x="508" y="166" font-size="12" class="sub">never sees the key or password</text>
+  <text x="508" y="196" font-size="13" font-weight="600" fill="#15803d">→ zero knowledge</text>
+
+  <!-- arrow browser -> server -->
+  <line x1="332" y1="130" x2="486" y2="130" stroke="#6b7280" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="409" y="120" font-size="12" fill="#374151" text-anchor="middle">POST ciphertext</text>
+  <text x="409" y="150" font-size="11" class="sub" text-anchor="middle">(HTTPS)</text>
+
+  <!-- key stays client-side -->
+  <rect x="180" y="250" width="460" height="48" rx="8" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="410" y="270" font-size="12.5" text-anchor="middle" fill="#9a3412">The key lives in the link fragment:
+    <tspan class="mono" fill="#b45309">  https://host/#&lt;id&gt;.&lt;key&gt;</tspan></text>
+  <text x="410" y="289" font-size="11.5" text-anchor="middle" class="sub">browsers never send the part after “#” to the server</text>
+</svg>
