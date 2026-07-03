@@ -122,7 +122,15 @@ impl Paste {
         expires_at: Option<i64>,
         one_shot: bool,
     ) -> Self {
-        Self { id, content, syntax, created_at, expires_at, one_shot, views: 0 }
+        Self {
+            id,
+            content,
+            syntax,
+            created_at,
+            expires_at,
+            one_shot,
+            views: 0,
+        }
     }
 
     /// True if the paste has an expiry at or before `now` (Unix seconds).
@@ -153,6 +161,11 @@ pub trait PasteRepository: Send + Sync + 'static {
 
     /// Fetch a paste by id, or `None` if it does not exist.
     async fn get(&self, id: &PasteId) -> Result<Option<Paste>, RepoError>;
+
+    /// Atomically remove and return a paste (get + delete in one step). Used for
+    /// burn-after-read so a `one_shot` paste is served **at most once**, even
+    /// under concurrent fetches. Returns `None` if it was already gone.
+    async fn take(&self, id: &PasteId) -> Result<Option<Paste>, RepoError>;
 
     /// Increment the view counter by `n` (`n >= 0`); returns `true` if a row was
     /// updated. This is the primitive the batched view-counter writes through, so

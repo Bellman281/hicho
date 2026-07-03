@@ -23,6 +23,7 @@ fn test_config() -> Config {
         max_concurrent_requests: 1024,
         rate_limit_rps: 0,
         rate_limit_burst: 0,
+        trust_proxy: false,
     }
 }
 
@@ -34,7 +35,12 @@ fn app() -> Router {
 #[tokio::test]
 async fn health_returns_ok() {
     let response = app()
-        .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);

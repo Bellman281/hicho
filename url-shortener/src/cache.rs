@@ -50,9 +50,17 @@ pub struct InMemoryCache {
 
 /// Commands the owning cache task understands.
 enum CacheCmd {
-    Get { key: String, reply: oneshot::Sender<Option<String>> },
-    Set { key: String, value: String },
-    Delete { key: String },
+    Get {
+        key: String,
+        reply: oneshot::Sender<Option<String>>,
+    },
+    Set {
+        key: String,
+        value: String,
+    },
+    Delete {
+        key: String,
+    },
 }
 
 impl Default for InMemoryCache {
@@ -66,13 +74,13 @@ impl InMemoryCache {
     /// every `#[tokio::test]`; production uses Redis, not this).
     pub fn new() -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(run_cache(rx));
+        tokio::spawn(run(rx));
         Self { tx }
     }
 }
 
 /// The cache actor loop: sole owner of the entries map.
-async fn run_cache(mut rx: mpsc::UnboundedReceiver<CacheCmd>) {
+async fn run(mut rx: mpsc::UnboundedReceiver<CacheCmd>) {
     let mut entries: HashMap<String, String> = HashMap::new();
     while let Some(cmd) = rx.recv().await {
         match cmd {
@@ -93,7 +101,14 @@ async fn run_cache(mut rx: mpsc::UnboundedReceiver<CacheCmd>) {
 impl Cache for InMemoryCache {
     async fn get(&self, key: &str) -> Option<String> {
         let (reply, rx) = oneshot::channel();
-        if self.tx.send(CacheCmd::Get { key: key.to_owned(), reply }).is_err() {
+        if self
+            .tx
+            .send(CacheCmd::Get {
+                key: key.to_owned(),
+                reply,
+            })
+            .is_err()
+        {
             return None; // actor gone -> treat as a miss (best-effort)
         }
         rx.await.unwrap_or(None)
@@ -101,10 +116,15 @@ impl Cache for InMemoryCache {
     async fn set(&self, key: &str, value: &str, _ttl_secs: u64) {
         // Fire-and-forget; the channel is FIFO, so a set is processed before any
         // later get on the same handle (best-effort, TTL ignored as before).
-        let _ = self.tx.send(CacheCmd::Set { key: key.to_owned(), value: value.to_owned() });
+        let _ = self.tx.send(CacheCmd::Set {
+            key: key.to_owned(),
+            value: value.to_owned(),
+        });
     }
     async fn delete(&self, key: &str) {
-        let _ = self.tx.send(CacheCmd::Delete { key: key.to_owned() });
+        let _ = self.tx.send(CacheCmd::Delete {
+            key: key.to_owned(),
+        });
     }
 }
 

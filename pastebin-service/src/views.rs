@@ -29,6 +29,11 @@ use crate::domain::{PasteId, PasteRepository};
 pub const DEFAULT_FLUSH_INTERVAL: Duration = Duration::from_secs(2);
 /// Default number of *distinct* ids buffered before an early flush is forced.
 pub const DEFAULT_MAX_PENDING: usize = 1024;
+/// Bound on the in-flight command queue. View counting is best-effort, so once
+/// this many messages are queued a further `record` is dropped rather than
+/// growing memory without limit (the consumer is fast, so this is only reached
+/// under a pathological burst).
+const CHANNEL_CAPACITY: usize = 8192;
 
 /// Records a paste view. Best-effort and non-blocking: a failed or dropped count
 /// must never fail (or slow) a fetch.
@@ -75,7 +80,7 @@ enum Msg {
 /// hot path only does a non-blocking channel send; all map mutation and DB
 /// writes happen on the owning task, so there is no shared lock at all.
 pub struct BatchingViewRecorder {
-    tx: mpsc::UnboundedSender<Msg>,
+    tx: mpsc::Sender<Msg>,
 }
 
 impl BatchingViewRecorder {
@@ -92,7 +97,7 @@ impl BatchingViewRecorder {
         interval: Duration,
         max_pending: usize,
     ) -> (Arc<Self>, JoinHandle<()>) {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(CHANNEL_CAPACITY);
         let handle = tokio::spawn(run(repo, rx, interval, max_pending.max(1)));
         (Arc::new(Self { tx }), handle)
     }
@@ -106,14 +111,16 @@ impl BatchingViewRecorder {
 #[async_trait::async_trait]
 impl ViewRecorder for BatchingViewRecorder {
     async fn record(&self, id: PasteId) {
-        // If the receiver is gone (shutting down), silently drop — best-effort.
-        let _ = self.tx.send(Msg::View(id));
+        // Non-blocking: if the queue is full or the receiver is gone, drop the
+        // view — best-effort counting must never slow or fail a fetch.
+        let _ = self.tx.try_send(Msg::View(id));
     }
 
     async fn flush(&self) {
         let (ack, done) = oneshot::channel();
-        // If the task is already gone, there is nothing left to flush.
-        if self.tx.send(Msg::Flush(ack)).is_ok() {
+        // Await a slot (flush runs on shutdown, not the hot path); if the task
+        // is already gone there is nothing left to flush.
+        if self.tx.send(Msg::Flush(ack)).await.is_ok() {
             let _ = done.await;
         }
     }
@@ -123,7 +130,7 @@ impl ViewRecorder for BatchingViewRecorder {
 /// on demand, and do a final flush when all senders drop (no lost counts).
 async fn run(
     repo: Arc<dyn PasteRepository>,
-    mut rx: mpsc::UnboundedReceiver<Msg>,
+    mut rx: mpsc::Receiver<Msg>,
     interval: Duration,
     max_pending: usize,
 ) {

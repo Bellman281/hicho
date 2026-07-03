@@ -107,6 +107,7 @@ impl LinkRepository for SqliteLinkRepository {
     }
 
     async fn increment_hits_by(&self, code: &ShortCode, n: i64) -> Result<bool, RepoError> {
+        debug_assert!(n >= 0, "increment_hits_by expects a non-negative count");
         let result = sqlx::query("UPDATE links SET hits = hits + ? WHERE code = ?")
             .bind(n)
             .bind(code.as_str())

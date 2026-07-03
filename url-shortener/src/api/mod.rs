@@ -89,9 +89,7 @@ async fn rate_limit(
     request: Request,
     next: Next,
 ) -> Response {
-    let ip = conn
-        .map(|c| c.0.ip())
-        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    let ip = client_ip(&request, conn.as_ref(), state.config.trust_proxy);
     if state.rate_limiter.check(ip) {
         next.run(request).await
     } else {
@@ -101,6 +99,34 @@ async fn rate_limit(
         )
             .into_response()
     }
+}
+
+/// Determine the client IP used as the rate-limit key. Only when `trust_proxy`
+/// is set do we believe `X-Forwarded-For` (first hop) / `X-Real-IP` — otherwise
+/// a client could spoof those headers to dodge the limit. Default: the socket
+/// peer IP (or unspecified when absent, e.g. in-process tests).
+fn client_ip(
+    request: &Request,
+    conn: Option<&ConnectInfo<SocketAddr>>,
+    trust_proxy: bool,
+) -> IpAddr {
+    if trust_proxy {
+        let headers = request.headers();
+        if let Some(xff) = headers.get("x-forwarded-for").and_then(|h| h.to_str().ok()) {
+            if let Some(first) = xff.split(',').next() {
+                if let Ok(ip) = first.trim().parse::<IpAddr>() {
+                    return ip;
+                }
+            }
+        }
+        if let Some(real) = headers.get("x-real-ip").and_then(|h| h.to_str().ok()) {
+            if let Ok(ip) = real.trim().parse::<IpAddr>() {
+                return ip;
+            }
+        }
+    }
+    conn.map(|c| c.0.ip())
+        .unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
 }
 
 // ---------------------------------------------------------------------------

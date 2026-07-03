@@ -145,18 +145,22 @@ impl PasteService {
         }
 
         if paste.one_shot {
-            let _ = self.repo.delete(&id).await; // burn-after-read (never cached)
-        } else {
-            let ttl = cache_ttl_secs(&paste);
-            if ttl > 0 {
-                if let Ok(json) = serde_json::to_string(&CachedPaste::from_paste(&paste)) {
-                    self.cache.set(id.as_str(), &json, ttl).await;
-                }
-            }
-            // Counting a view must never fail (or block) a fetch, so it is
-            // best-effort and fire-and-forget — not propagated with `?`.
-            self.views.record(id).await;
+            // Burn-after-read must be atomic: `take` (remove + return in one op)
+            // guarantees that under concurrent fetches exactly one caller serves
+            // the paste; the losers get `None` -> NotFound. (One-shots are never
+            // cached, so the DB is the only source of truth here.)
+            return self.repo.take(&id).await?.ok_or(ServiceError::NotFound);
         }
+
+        let ttl = cache_ttl_secs(&paste);
+        if ttl > 0 {
+            if let Ok(json) = serde_json::to_string(&CachedPaste::from_paste(&paste)) {
+                self.cache.set(id.as_str(), &json, ttl).await;
+            }
+        }
+        // Counting a view must never fail (or block) a fetch, so it is
+        // best-effort and fire-and-forget — not propagated with `?`.
+        self.views.record(id).await;
         Ok(paste)
     }
 
@@ -311,7 +315,12 @@ mod tests {
     async fn create_then_fetch_roundtrips() {
         let svc = service();
         let p = svc
-            .create("hello world".to_owned(), Some("text".to_owned()), None, false)
+            .create(
+                "hello world".to_owned(),
+                Some("text".to_owned()),
+                None,
+                false,
+            )
             .await
             .unwrap();
         let fetched = svc.fetch(p.id.as_str().to_owned()).await.unwrap();
@@ -402,10 +411,7 @@ mod tests {
     #[tokio::test]
     async fn delete_removes_paste() {
         let svc = service();
-        let p = svc
-            .create("x".to_owned(), None, None, false)
-            .await
-            .unwrap();
+        let p = svc.create("x".to_owned(), None, None, false).await.unwrap();
         svc.delete(p.id.as_str().to_owned()).await.unwrap();
         assert!(matches!(
             svc.fetch(p.id.as_str().to_owned()).await,

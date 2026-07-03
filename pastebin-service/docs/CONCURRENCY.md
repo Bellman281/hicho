@@ -26,11 +26,20 @@ pattern.
 
 ## Notes specific to the pastebin
 
-- **View counting is batched, burn-after-read is not.** A non-one-shot fetch only
-  *enqueues* the paste id on a channel; a background task coalesces and flushes
-  `views = views + n`. A `one_shot` paste, by contrast, is **deleted synchronously**
-  on first read — that must never be deferred, so it stays on the request path and
-  is never routed through the batcher.
+- **View counting is batched, burn-after-read is atomic (never batched).** A
+  non-one-shot fetch only *enqueues* the paste id on a channel; a background task
+  coalesces and flushes `views = views + n`. A `one_shot` paste is instead claimed
+  with an **atomic `take`** (remove-and-return in one operation — `DELETE …
+  RETURNING` in SQLite, a single actor message in memory), so under concurrent
+  fetches exactly **one** reader serves it and the losers get `NotFound`. This must
+  never be deferred, so it stays on the request path.
+- **Rate-limiter memory is bounded.** A background sweeper evicts buckets idle
+  beyond a threshold, so the per-IP map can't grow without limit under a flood of
+  distinct source IPs. The limiter still uses a `Mutex` (correct for its tiny
+  hot-path critical section).
+- **Rate-limit key is proxy-aware (opt-in).** With `trust_proxy` set, the client
+  IP comes from `X-Forwarded-For` / `X-Real-IP`; off by default (socket peer IP)
+  so the header can't be spoofed to bypass the limit.
 - **Repository port.** `increment_views_by(id, n)` is the primitive every backend
   implements; `increment_views` is a default method calling it with `1`.
 - **Recorder port.** `ViewRecorder` has `ImmediateViewRecorder` (one write per

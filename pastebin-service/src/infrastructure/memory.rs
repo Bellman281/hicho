@@ -24,13 +24,31 @@ use crate::domain::{BoxedError, Paste, PasteId, PasteRepository, RepoError};
 /// which the task returns the result of that single call.
 enum Cmd {
     /// Insert a paste; reply `true` if inserted, `false` if the id was taken.
-    Insert { paste: Paste, reply: oneshot::Sender<bool> },
+    Insert {
+        paste: Paste,
+        reply: oneshot::Sender<bool>,
+    },
     /// Fetch a paste by id.
-    Get { id: String, reply: oneshot::Sender<Option<Paste>> },
+    Get {
+        id: String,
+        reply: oneshot::Sender<Option<Paste>>,
+    },
+    /// Atomically remove and return a paste (burn-after-read).
+    Take {
+        id: String,
+        reply: oneshot::Sender<Option<Paste>>,
+    },
     /// Add `n` to a paste's view count; reply `true` if the row existed.
-    IncrementBy { id: String, n: i64, reply: oneshot::Sender<bool> },
+    IncrementBy {
+        id: String,
+        n: i64,
+        reply: oneshot::Sender<bool>,
+    },
     /// Remove a paste; reply `true` if a row was removed.
-    Delete { id: String, reply: oneshot::Sender<bool> },
+    Delete {
+        id: String,
+        reply: oneshot::Sender<bool>,
+    },
     /// Liveness round-trip (proves the owning task is still running).
     Ping { reply: oneshot::Sender<()> },
 }
@@ -93,6 +111,9 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>) {
             Cmd::Get { id, reply } => {
                 let _ = reply.send(pastes.get(&id).cloned());
             }
+            Cmd::Take { id, reply } => {
+                let _ = reply.send(pastes.remove(&id)); // atomic get + delete
+            }
             Cmd::IncrementBy { id, n, reply } => {
                 let updated = match pastes.get_mut(&id) {
                     Some(paste) => {
@@ -118,7 +139,10 @@ async fn run(mut rx: mpsc::UnboundedReceiver<Cmd>) {
 impl PasteRepository for InMemoryPasteRepository {
     async fn insert(&self, paste: &Paste) -> Result<(), RepoError> {
         let (reply, rx) = oneshot::channel();
-        self.dispatch(Cmd::Insert { paste: paste.clone(), reply })?;
+        self.dispatch(Cmd::Insert {
+            paste: paste.clone(),
+            reply,
+        })?;
         match rx.await {
             Ok(true) => Ok(()),
             Ok(false) => Err(RepoError::Conflict),
@@ -128,19 +152,39 @@ impl PasteRepository for InMemoryPasteRepository {
 
     async fn get(&self, id: &PasteId) -> Result<Option<Paste>, RepoError> {
         let (reply, rx) = oneshot::channel();
-        self.dispatch(Cmd::Get { id: id.as_str().to_owned(), reply })?;
+        self.dispatch(Cmd::Get {
+            id: id.as_str().to_owned(),
+            reply,
+        })?;
+        rx.await.map_err(|_| actor_stopped())
+    }
+
+    async fn take(&self, id: &PasteId) -> Result<Option<Paste>, RepoError> {
+        let (reply, rx) = oneshot::channel();
+        self.dispatch(Cmd::Take {
+            id: id.as_str().to_owned(),
+            reply,
+        })?;
         rx.await.map_err(|_| actor_stopped())
     }
 
     async fn increment_views_by(&self, id: &PasteId, n: i64) -> Result<bool, RepoError> {
+        debug_assert!(n >= 0, "increment_views_by expects a non-negative count");
         let (reply, rx) = oneshot::channel();
-        self.dispatch(Cmd::IncrementBy { id: id.as_str().to_owned(), n, reply })?;
+        self.dispatch(Cmd::IncrementBy {
+            id: id.as_str().to_owned(),
+            n,
+            reply,
+        })?;
         rx.await.map_err(|_| actor_stopped())
     }
 
     async fn delete(&self, id: &PasteId) -> Result<bool, RepoError> {
         let (reply, rx) = oneshot::channel();
-        self.dispatch(Cmd::Delete { id: id.as_str().to_owned(), reply })?;
+        self.dispatch(Cmd::Delete {
+            id: id.as_str().to_owned(),
+            reply,
+        })?;
         rx.await.map_err(|_| actor_stopped())
     }
 
@@ -174,7 +218,10 @@ mod tests {
 
         assert!(!repo.increment_views(&id).await.unwrap());
         repo.insert(&sample()).await.unwrap();
-        assert!(matches!(repo.insert(&sample()).await, Err(RepoError::Conflict)));
+        assert!(matches!(
+            repo.insert(&sample()).await,
+            Err(RepoError::Conflict)
+        ));
 
         assert!(repo.increment_views(&id).await.unwrap());
         assert_eq!(repo.get(&id).await.unwrap().unwrap().views, 1);
@@ -192,6 +239,18 @@ mod tests {
         assert!(repo.increment_views_by(&id, 5).await.unwrap());
         repo.increment_views(&id).await.unwrap(); // default delegates to +1
         assert_eq!(repo.get(&id).await.unwrap().unwrap().views, 6);
+    }
+
+    #[tokio::test]
+    async fn take_removes_and_returns_exactly_once() {
+        let repo = InMemoryPasteRepository::default();
+        let id = PasteId::parse("abc").unwrap();
+        assert!(repo.take(&id).await.unwrap().is_none()); // absent
+        repo.insert(&sample()).await.unwrap();
+        // First take wins and returns the paste; it is gone afterward.
+        assert!(repo.take(&id).await.unwrap().is_some());
+        assert!(repo.take(&id).await.unwrap().is_none());
+        assert!(repo.get(&id).await.unwrap().is_none());
     }
 
     #[tokio::test]

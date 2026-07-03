@@ -25,6 +25,7 @@ fn config() -> Config {
         max_concurrent_requests: 1024,
         rate_limit_rps: 0,
         rate_limit_burst: 0,
+        trust_proxy: false,
     }
 }
 
@@ -45,7 +46,11 @@ async fn get(uri: &str) -> (StatusCode, Option<String>, String) {
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    (status, content_type, String::from_utf8(bytes.to_vec()).unwrap())
+    (
+        status,
+        content_type,
+        String::from_utf8(bytes.to_vec()).unwrap(),
+    )
 }
 
 #[tokio::test]

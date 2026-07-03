@@ -28,6 +28,10 @@ pub struct Config {
     pub rate_limit_rps: u32,
     /// Per-IP burst capacity. When `0` and `rate_limit_rps > 0`, defaults to rps.
     pub rate_limit_burst: u32,
+    /// Trust `X-Forwarded-For` / `X-Real-IP` for the client IP (rate-limit key).
+    /// **Only enable behind a trusted proxy** — otherwise clients can spoof the
+    /// header and bypass the limit. Off by default (uses the socket peer IP).
+    pub trust_proxy: bool,
 }
 
 impl Config {
@@ -74,6 +78,10 @@ impl Config {
             .parse()
             .map_err(|_| ConfigError::Invalid("RATE_LIMIT_BURST"))?;
 
+        let trust_proxy = env_or("TRUST_PROXY", "false")
+            .parse()
+            .map_err(|_| ConfigError::Invalid("TRUST_PROXY"))?;
+
         Ok(Self {
             bind_addr,
             max_body_bytes,
@@ -85,6 +93,7 @@ impl Config {
             blocked_hosts,
             rate_limit_rps,
             rate_limit_burst,
+            trust_proxy,
         })
     }
 }

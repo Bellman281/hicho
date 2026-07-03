@@ -26,6 +26,7 @@ fn config() -> Config {
         blocked_hosts: Vec::new(),
         rate_limit_rps: 0,
         rate_limit_burst: 0,
+        trust_proxy: false,
     }
 }
 

@@ -27,6 +27,7 @@ fn config() -> Config {
         max_concurrent_requests: 1024,
         rate_limit_rps: 0,
         rate_limit_burst: 0,
+        trust_proxy: false,
     }
 }
 
@@ -44,7 +45,13 @@ async fn send(app: &Router, request: Request<Body>) -> (StatusCode, Option<Strin
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
-    let body = response.into_body().collect().await.unwrap().to_bytes().to_vec();
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes()
+        .to_vec();
     (status, content_type, body)
 }
 
@@ -80,14 +87,20 @@ async fn create_then_fetch_then_raw_then_delete() {
     // Create.
     let (status, _, body) = send(
         &app,
-        post_json("/api/pastes", r#"{"content":"hello world","syntax":"text"}"#),
+        post_json(
+            "/api/pastes",
+            r#"{"content":"hello world","syntax":"text"}"#,
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
     let created = json(&body);
     let id = created["id"].as_str().unwrap().to_owned();
     assert_eq!(created["one_shot"], false);
-    assert!(created["url"].as_str().unwrap().ends_with(&format!("/api/pastes/{id}")));
+    assert!(created["url"]
+        .as_str()
+        .unwrap()
+        .ends_with(&format!("/api/pastes/{id}")));
 
     // Fetch JSON.
     let (status, ct, body) = send(&app, get(&format!("/api/pastes/{id}"))).await;
@@ -131,8 +144,11 @@ async fn oversized_content_is_rejected() {
 async fn ttl_paste_expires() {
     let app = app();
     // ttl_seconds:0 ⇒ expires_at == created_at ⇒ expired on read.
-    let (status, _, body) =
-        send(&app, post_json("/api/pastes", r#"{"content":"x","ttl_seconds":0}"#)).await;
+    let (status, _, body) = send(
+        &app,
+        post_json("/api/pastes", r#"{"content":"x","ttl_seconds":0}"#),
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED);
     let id = json(&body)["id"].as_str().unwrap().to_owned();
 

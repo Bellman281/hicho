@@ -6,13 +6,20 @@
 //!
 //! Scope: this is a **per-instance** limiter — each replica counts
 //! independently. A globally-consistent limit across replicas needs a shared
-//! store (e.g. Redis). The bucket map grows with distinct IPs; for very large
-//! deployments add periodic eviction.
+//! store (e.g. Redis). A background sweeper evicts idle buckets so the map
+//! cannot grow without bound (e.g. under a flood of distinct source IPs).
 
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::Mutex;
-use std::time::Instant;
+use std::sync::{Arc, Mutex, Weak};
+use std::time::{Duration, Instant};
+
+/// Buckets untouched for at least this long are evicted. A bucket idle this long
+/// has fully refilled, so dropping it is behavior-preserving — a later request
+/// simply recreates a full one.
+const IDLE_EVICT: Duration = Duration::from_secs(600);
+
+type Buckets = Mutex<HashMap<IpAddr, Bucket>>;
 
 #[derive(Debug)]
 struct Bucket {
@@ -25,7 +32,7 @@ struct Bucket {
 pub struct RateLimiter {
     capacity: f64,
     refill_per_sec: f64,
-    buckets: Mutex<HashMap<IpAddr, Bucket>>,
+    buckets: Arc<Buckets>,
 }
 
 impl RateLimiter {
@@ -33,10 +40,19 @@ impl RateLimiter {
     /// `rps > 0`, the burst defaults to `rps`.
     pub fn new(rps: u32, burst: u32) -> Self {
         let capacity = if burst == 0 { rps } else { burst };
+        let buckets: Arc<Buckets> = Arc::new(Mutex::new(HashMap::new()));
+        // When limiting is enabled AND we're inside a Tokio runtime (the running
+        // server, not a synchronous unit test), spawn a sweeper that evicts idle
+        // buckets. It holds only a Weak ref, so it exits when the limiter drops.
+        if rps > 0 {
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(sweep_idle(Arc::downgrade(&buckets)));
+            }
+        }
         Self {
             capacity: capacity as f64,
             refill_per_sec: rps as f64,
-            buckets: Mutex::new(HashMap::new()),
+            buckets,
         }
     }
 
@@ -60,6 +76,22 @@ impl RateLimiter {
         } else {
             false
         }
+    }
+}
+
+/// Periodically drop buckets untouched for `IDLE_EVICT`, bounding memory. Exits
+/// once the `RateLimiter` (the last strong `Arc`) is dropped.
+async fn sweep_idle(buckets: Weak<Buckets>) {
+    let mut ticker = tokio::time::interval(IDLE_EVICT);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        ticker.tick().await;
+        let Some(buckets) = buckets.upgrade() else {
+            return;
+        };
+        let now = Instant::now();
+        let mut map = buckets.lock().unwrap_or_else(|e| e.into_inner());
+        map.retain(|_, b| now.duration_since(b.last) < IDLE_EVICT);
     }
 }
 

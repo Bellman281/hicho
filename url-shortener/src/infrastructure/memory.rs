@@ -152,6 +152,7 @@ impl LinkRepository for InMemoryLinkRepository {
     }
 
     async fn increment_hits_by(&self, code: &ShortCode, n: i64) -> Result<bool, RepoError> {
+        debug_assert!(n >= 0, "increment_hits_by expects a non-negative count");
         let (reply, rx) = oneshot::channel();
         self.dispatch(Cmd::IncrementBy {
             code: code.as_str().to_owned(),

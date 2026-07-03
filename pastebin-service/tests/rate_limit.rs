@@ -24,6 +24,7 @@ fn config() -> Config {
         max_concurrent_requests: 1024,
         rate_limit_rps: 1,
         rate_limit_burst: 1,
+        trust_proxy: false,
     }
 }
 

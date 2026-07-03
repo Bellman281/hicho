@@ -6,13 +6,34 @@
 //! live database. WAL + a busy timeout improve read/write concurrency.
 
 use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
+    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow, SqliteSynchronous,
 };
 use sqlx::{Row, SqlitePool};
 use std::str::FromStr;
 use std::time::Duration;
 
 use crate::domain::{BoxedError, Content, Paste, PasteId, PasteRepository, RepoError};
+
+/// Reconstruct a [`Paste`] from a row. Values were validated before insertion,
+/// so we rebuild via `from_trusted` without re-running (fallible) validation.
+fn row_to_paste(row: &SqliteRow) -> Result<Paste, RepoError> {
+    let id: String = row.try_get("id").map_err(backend)?;
+    let content: String = row.try_get("content").map_err(backend)?;
+    let syntax: Option<String> = row.try_get("syntax").map_err(backend)?;
+    let created_at: i64 = row.try_get("created_at").map_err(backend)?;
+    let expires_at: Option<i64> = row.try_get("expires_at").map_err(backend)?;
+    let one_shot: bool = row.try_get("one_shot").map_err(backend)?;
+    let views: i64 = row.try_get("views").map_err(backend)?;
+    Ok(Paste {
+        id: PasteId::from_trusted(id),
+        content: Content::from_trusted(content),
+        syntax,
+        created_at,
+        expires_at,
+        one_shot,
+        views,
+    })
+}
 
 /// SQLite-backed paste repository.
 #[derive(Clone)]
@@ -83,30 +104,33 @@ impl PasteRepository for SqlitePasteRepository {
         .await
         .map_err(backend)?;
 
-        let Some(row) = row else { return Ok(None) };
+        match row {
+            Some(row) => Ok(Some(row_to_paste(&row)?)),
+            None => Ok(None),
+        }
+    }
 
-        // Values were validated before insertion; reconstruct without re-running
-        // (potentially failing) validation.
-        let id: String = row.try_get("id").map_err(backend)?;
-        let content: String = row.try_get("content").map_err(backend)?;
-        let syntax: Option<String> = row.try_get("syntax").map_err(backend)?;
-        let created_at: i64 = row.try_get("created_at").map_err(backend)?;
-        let expires_at: Option<i64> = row.try_get("expires_at").map_err(backend)?;
-        let one_shot: bool = row.try_get("one_shot").map_err(backend)?;
-        let views: i64 = row.try_get("views").map_err(backend)?;
+    async fn take(&self, id: &PasteId) -> Result<Option<Paste>, RepoError> {
+        // Atomic remove-and-return: `DELETE ... RETURNING` claims the row in a
+        // single statement, so under concurrent fetches exactly one caller wins
+        // the burn (the others get `None`). Requires SQLite >= 3.35.
+        let row = sqlx::query(
+            "DELETE FROM pastes WHERE id = ? \
+             RETURNING id, content, syntax, created_at, expires_at, one_shot, views",
+        )
+        .bind(id.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?;
 
-        Ok(Some(Paste {
-            id: PasteId::from_trusted(id),
-            content: Content::from_trusted(content),
-            syntax,
-            created_at,
-            expires_at,
-            one_shot,
-            views,
-        }))
+        match row {
+            Some(row) => Ok(Some(row_to_paste(&row)?)),
+            None => Ok(None),
+        }
     }
 
     async fn increment_views_by(&self, id: &PasteId, n: i64) -> Result<bool, RepoError> {
+        debug_assert!(n >= 0, "increment_views_by expects a non-negative count");
         let result = sqlx::query("UPDATE pastes SET views = views + ? WHERE id = ?")
             .bind(n)
             .bind(id.as_str())
@@ -126,7 +150,10 @@ impl PasteRepository for SqlitePasteRepository {
     }
 
     async fn ping(&self) -> Result<(), RepoError> {
-        sqlx::query("SELECT 1").execute(&self.pool).await.map_err(backend)?;
+        sqlx::query("SELECT 1")
+            .execute(&self.pool)
+            .await
+            .map_err(backend)?;
         Ok(())
     }
 }
@@ -191,10 +218,25 @@ mod tests {
     async fn one_shot_and_expiry_round_trip() {
         let repo = repo().await;
         let id = PasteId::parse("abc123").unwrap();
-        repo.insert(&sample(true, Some(1_700_009_999))).await.unwrap();
+        repo.insert(&sample(true, Some(1_700_009_999)))
+            .await
+            .unwrap();
         let p = repo.get(&id).await.unwrap().unwrap();
         assert!(p.one_shot);
         assert_eq!(p.expires_at, Some(1_700_009_999));
+    }
+
+    #[tokio::test]
+    async fn take_removes_and_returns_once() {
+        let repo = repo().await;
+        let id = PasteId::parse("abc123").unwrap();
+        assert!(repo.take(&id).await.unwrap().is_none()); // absent
+        repo.insert(&sample(true, None)).await.unwrap();
+        // First take returns the row (DELETE ... RETURNING); then it's gone.
+        let taken = repo.take(&id).await.unwrap().unwrap();
+        assert_eq!(taken.content.as_str(), "body text");
+        assert!(repo.take(&id).await.unwrap().is_none());
+        assert!(repo.get(&id).await.unwrap().is_none());
     }
 
     #[tokio::test]
