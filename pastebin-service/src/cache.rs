@@ -11,7 +11,8 @@
 //! - [`RedisCache`] — production, shared across instances.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+
+use tokio::sync::{mpsc, oneshot};
 
 use crate::domain::BoxedError;
 
@@ -37,27 +38,73 @@ impl Cache for NoOpCache {
 }
 
 /// Process-local cache (ignores TTL). For tests and single-instance local runs.
-#[derive(Debug, Default)]
+///
+/// Implemented as an actor — one task owns the map, callers message it over a
+/// channel — for consistency with the in-memory repository (no lock anywhere).
+/// For a test/dev double this is a performance wash; it's here so the codebase
+/// uses one sharing model throughout. Production caching is Redis.
+#[derive(Debug, Clone)]
 pub struct InMemoryCache {
-    entries: Mutex<HashMap<String, String>>,
+    tx: mpsc::UnboundedSender<CacheCmd>,
+}
+
+/// Commands the owning cache task understands.
+enum CacheCmd {
+    Get { key: String, reply: oneshot::Sender<Option<String>> },
+    Set { key: String, value: String },
+    Delete { key: String },
+}
+
+impl Default for InMemoryCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl InMemoryCache {
-    fn guard(&self) -> std::sync::MutexGuard<'_, HashMap<String, String>> {
-        self.entries.lock().unwrap_or_else(|e| e.into_inner())
+    /// Spawn the owning task. Must be called within a Tokio runtime (true in
+    /// every `#[tokio::test]`; production uses Redis, not this).
+    pub fn new() -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(run_cache(rx));
+        Self { tx }
+    }
+}
+
+/// The cache actor loop: sole owner of the entries map.
+async fn run_cache(mut rx: mpsc::UnboundedReceiver<CacheCmd>) {
+    let mut entries: HashMap<String, String> = HashMap::new();
+    while let Some(cmd) = rx.recv().await {
+        match cmd {
+            CacheCmd::Get { key, reply } => {
+                let _ = reply.send(entries.get(&key).cloned());
+            }
+            CacheCmd::Set { key, value } => {
+                entries.insert(key, value);
+            }
+            CacheCmd::Delete { key } => {
+                entries.remove(&key);
+            }
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl Cache for InMemoryCache {
     async fn get(&self, key: &str) -> Option<String> {
-        self.guard().get(key).cloned()
+        let (reply, rx) = oneshot::channel();
+        if self.tx.send(CacheCmd::Get { key: key.to_owned(), reply }).is_err() {
+            return None; // actor gone -> treat as a miss (best-effort)
+        }
+        rx.await.unwrap_or(None)
     }
     async fn set(&self, key: &str, value: &str, _ttl_secs: u64) {
-        self.guard().insert(key.to_owned(), value.to_owned());
+        // Fire-and-forget; the channel is FIFO, so a set is processed before any
+        // later get on the same handle (best-effort, TTL ignored as before).
+        let _ = self.tx.send(CacheCmd::Set { key: key.to_owned(), value: value.to_owned() });
     }
     async fn delete(&self, key: &str) {
-        self.guard().remove(key);
+        let _ = self.tx.send(CacheCmd::Delete { key: key.to_owned() });
     }
 }
 

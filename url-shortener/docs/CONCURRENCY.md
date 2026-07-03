@@ -51,6 +51,9 @@ first tool that fits. Each rung is cheaper to reason about than the one below it
   round-trip serialized on the owning task. That is *fine for a test/dev double*
   (production is SQLite), but it is **not** what you'd want for a hot, read-heavy
   production map. For that, `RwLock` (parallel reads) or a sharded map is faster.
+- The in-memory **cache** (`InMemoryCache`, another test/dev double) was converted
+  to an actor the same way, purely for *consistency* — one sharing model across
+  the codebase. Production caching is Redis, so there is no runtime cost either way.
 
 ### 2. Hit counter → channel-batched background writer
 
@@ -110,6 +113,38 @@ lock-free by definition. The only mutable interiors are the rate limiter's map
 | Redirect hit counting      | channel batcher     | 5    | Fire-and-forget + batchable |
 | Redirects-served metric    | `AtomicU64`         | 4    | Single scalar, genuinely lock-free |
 | Production store           | SQLite (`sqlx`)     | —    | WAL + busy_timeout for read/write concurrency |
+
+## Dependency locks (and why they aren't the same problem)
+
+A reasonable worry: "our crates use `Mutex` internally, so haven't we just moved
+the contention?" No. Our goal was never *zero mutexes in the process* — that is
+impossible and pointless. The goal was narrower: **don't hold a lock in *our*
+code on a per-request hot path where a better tool fits.** A library's internal
+lock is not ours to reimplement, is far more optimized than we'd hand-roll, and
+is held briefly by design.
+
+Where our direct dependencies use internal synchronization, and why it's fine:
+
+| Crate | Internal locking | Does it matter for us? |
+|-------|------------------|------------------------|
+| `sqlx` (`SqlitePool`) | async semaphore for connection checkout | Bounded by `max_connections`. **The real serialization is SQLite itself: single-writer.** That's why we added WAL (concurrent readers), `busy_timeout`, and the batched counter (fewer writes). True write concurrency = Postgres. |
+| `tokio` | scheduler + channel internals (often lock-free queues) | We use `tokio::sync` **channels**, not `tokio::sync::Mutex`. Highly tuned; not our hot path. |
+| `tracing` | global subscriber locks when emitting events | It's I/O (logging), bounded by log level — not the data path. |
+| `tower` / `tower-http` | `ConcurrencyLimitLayer` uses a semaphore | That *is its job* (bounding in-flight work); routing is otherwise lock-free. |
+| `redis` (`ConnectionManager`) | internal multiplexing | Async, non-blocking, designed for concurrent use. |
+| `axum`, `rand` (thread-local rng), `serde`, `url`, `thiserror` | none on our data path | — |
+
+To inspect the transitive picture yourself:
+
+```bash
+cargo tree                    # full dependency graph
+cargo tree -i parking_lot     # who pulls in the fast-mutex crate (many do; that's fine)
+cargo tree -i tokio
+```
+
+The takeaway: the one lock that actually governs *our* scaling is the database's
+single-writer serialization, and we already mitigate it (WAL + `busy_timeout` +
+batched writes). Everything else is a library's well-tuned internal detail.
 
 ## The rule of thumb
 
