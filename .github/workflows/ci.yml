@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [url-shortener, pastebin-service]
+        service: [url-shortener, pastebin-service, tcp-actor-server]
     defaults:
       run:
         working-directory: ${{ matrix.service }}
