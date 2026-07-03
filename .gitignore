@@ -2,6 +2,9 @@
 /target
 **/*.rs.bk
 
+# macOS Finder metadata.
+.DS_Store
+
 # Local SQLite databases and env files.
 # Covers the DB plus its WAL sidecars (-wal/-shm) and rollback journal.
 *.db
