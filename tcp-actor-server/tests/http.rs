@@ -26,7 +26,11 @@ struct Running {
 }
 
 async fn start() -> Running {
-    let server = Server::bind(test_config()).await.unwrap();
+    start_with(test_config()).await
+}
+
+async fn start_with(config: Config) -> Running {
+    let server = Server::bind(config).await.unwrap();
     let addr = server.local_addr().unwrap();
     let (tx, rx) = oneshot::channel::<()>();
     let handle = tokio::spawn(async move {
@@ -134,5 +138,48 @@ async fn graceful_shutdown_completes() {
     tokio::time::timeout(Duration::from_secs(5), srv.handle)
         .await
         .expect("server did not shut down in time")
+        .expect("server task panicked");
+}
+
+#[tokio::test]
+async fn slow_loris_request_times_out() {
+    // Short whole-request deadline so the test is fast.
+    let mut config = test_config();
+    config.request_timeout = Duration::from_millis(300);
+    let srv = start_with(config).await;
+
+    // Send a partial head and never finish it — a per-read timeout would let this
+    // hold the connection forever; the whole-request deadline must cut it off.
+    let mut s = TcpStream::connect(srv.addr).await.unwrap();
+    s.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n").await.unwrap(); // no terminating blank line
+
+    let mut out = Vec::new();
+    tokio::time::timeout(Duration::from_secs(3), s.read_to_end(&mut out))
+        .await
+        .expect("slow-loris connection was not closed in time")
+        .unwrap();
+    let resp = String::from_utf8_lossy(&out);
+    assert!(resp.contains("408"), "expected 408 Request Timeout, got: {resp}");
+}
+
+#[tokio::test]
+async fn graceful_shutdown_waits_for_open_connection() {
+    let mut config = test_config();
+    config.shutdown_grace = Duration::from_secs(2);
+    let mut srv = start_with(config).await;
+
+    // Open a keep-alive connection and complete one request, keeping it open.
+    let mut s = TcpStream::connect(srv.addr).await.unwrap();
+    s.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").await.unwrap();
+    let mut buf = [0u8; 1024];
+    let n = s.read(&mut buf).await.unwrap();
+    assert!(String::from_utf8_lossy(&buf[..n]).contains("200 OK"));
+
+    // The idle connection must close on shutdown so the drain (re-acquiring every
+    // permit) completes well within the grace window.
+    srv.shutdown.take().unwrap().send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), srv.handle)
+        .await
+        .expect("server did not drain in time")
         .expect("server task panicked");
 }

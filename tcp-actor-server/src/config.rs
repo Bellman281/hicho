@@ -17,8 +17,11 @@ pub struct Config {
     pub max_connections: usize,
     /// Maximum accepted request-body size, in bytes (larger → `413`).
     pub max_body_bytes: usize,
-    /// Per-read inactivity timeout. An idle keep-alive connection is closed after
-    /// this; a stalled in-flight request gets a `408`.
+    /// Whole-request deadline: once a request's first bytes arrive, the entire
+    /// request (head + body) must be received within this or it gets a `408`. A
+    /// *per-read* timeout can be reset forever by a slow-loris trickling one byte
+    /// at a time; a whole-request deadline cannot. Also bounds idle time between
+    /// keep-alive requests.
     pub request_timeout: Duration,
     /// How long to let in-flight connections drain after a shutdown signal.
     pub shutdown_grace: Duration,

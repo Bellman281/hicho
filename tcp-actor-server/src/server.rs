@@ -9,10 +9,16 @@
 //! - **Bounded concurrency.** The accept loop holds a `Semaphore` permit per
 //!   connection; at `max_connections` it stops accepting (backpressure) instead of
 //!   spawning unbounded tasks.
+//! - **Slow-loris resistance.** Once a request begins, the *entire* request (head
+//!   and body) must arrive within one `request_timeout` deadline — a per-read
+//!   timeout can be reset forever by trickling one byte at a time; a whole-request
+//!   deadline cannot.
 //! - **Shared state without locks.** Live connections are owned by the registry
 //!   actor; counters are lock-free atomics; config is read-only behind `Arc`.
 //! - **Graceful shutdown.** A `watch` flag tells the accept loop to stop and each
-//!   connection to finish its in-flight request and close.
+//!   connection to finish its in-flight request and close; the server then *waits*
+//!   for connections to actually drain (by re-acquiring every semaphore permit),
+//!   bounded by the grace period.
 
 use std::io;
 use std::net::SocketAddr;
@@ -22,6 +28,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{watch, Semaphore};
+use tokio::time::Instant;
 use tracing::{debug, warn};
 
 use crate::config::Config;
@@ -59,7 +66,8 @@ impl Server {
         self.listener.local_addr()
     }
 
-    /// Serve until `shutdown` resolves, then let in-flight connections drain.
+    /// Serve until `shutdown` resolves, then wait for in-flight connections to
+    /// drain (bounded by the grace period).
     pub async fn run(
         self,
         shutdown: impl std::future::Future<Output = ()> + Send + 'static,
@@ -71,7 +79,8 @@ impl Server {
             let _ = flag_tx.send(true);
         });
 
-        let limit = Arc::new(Semaphore::new(self.state.config.max_connections));
+        let max_conns = self.state.config.max_connections;
+        let limit = Arc::new(Semaphore::new(max_conns));
         let next_id = AtomicU64::new(1);
         let mut brk = flag_rx.clone();
 
@@ -97,6 +106,9 @@ impl Server {
                     Err(e) => {
                         warn!(error = %e, "accept failed");
                         drop(permit);
+                        // Back off briefly so a persistent error (e.g. EMFILE)
+                        // doesn't spin the loop hot.
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                         continue;
                     }
                 },
@@ -111,14 +123,25 @@ impl Server {
             });
         }
 
-        // Let in-flight connections observe the flag and finish.
-        tokio::time::sleep(self.state.config.shutdown_grace).await;
+        // Wait for in-flight connections to actually finish. Each live connection
+        // holds one permit, so acquiring *all* of them succeeds only once every
+        // connection task has released its permit (i.e. ended). Bounded by grace.
+        let max = u32::try_from(max_conns).unwrap_or(u32::MAX);
+        match tokio::time::timeout(
+            self.state.config.shutdown_grace,
+            Arc::clone(&limit).acquire_many_owned(max),
+        )
+        .await
+        {
+            Ok(_) => {} // all connections drained (or the semaphore closed)
+            Err(_) => warn!("shutdown grace elapsed with connections still draining"),
+        }
         Ok(())
     }
 }
 
 /// Handle one connection to completion: read requests, route, respond, honoring
-/// keep-alive, timeouts, and the shutdown flag.
+/// keep-alive, the per-request deadline, and the shutdown flag.
 async fn handle_connection(
     id: u64,
     stream: TcpStream,
@@ -131,108 +154,75 @@ async fn handle_connection(
     let _ = stream.set_nodelay(true); // best-effort: lower latency
     let (mut rd, mut wr) = stream.into_split();
     let mut buf: Vec<u8> = Vec::with_capacity(8192);
-    let timeout = state.config.request_timeout;
+    let request_timeout = state.config.request_timeout;
 
     'conn: loop {
+        // Deadline for the *current* request, armed when its first bytes arrive.
+        // Bounding the whole request (not each read) is what defeats slow-loris.
+        let mut deadline: Option<Instant> = None;
+
         // Read until a full request head is buffered.
         let (head, head_len) = loop {
             match parse_head(&buf) {
                 Ok(parsed) => break parsed,
                 Err(ParseError::Incomplete) => {}
                 Err(ParseError::HeadTooLarge) => {
-                    let _ = wr
-                        .write_all(&build_response(
-                            431,
-                            "Request Header Fields Too Large",
-                            "header too large\n",
-                            false,
-                            true,
-                        ))
-                        .await;
+                    respond(&mut wr, 431, "Request Header Fields Too Large", "header too large\n").await;
                     break 'conn;
                 }
                 Err(ParseError::Unsupported) => {
-                    let _ = wr
-                        .write_all(&build_response(
-                            501,
-                            "Not Implemented",
-                            "unsupported framing\n",
-                            false,
-                            true,
-                        ))
-                        .await;
+                    respond(&mut wr, 501, "Not Implemented", "unsupported framing\n").await;
                     break 'conn;
                 }
                 Err(ParseError::Malformed) => {
-                    let _ = wr
-                        .write_all(&build_response(
-                            400,
-                            "Bad Request",
-                            "bad request\n",
-                            false,
-                            true,
-                        ))
-                        .await;
+                    respond(&mut wr, 400, "Bad Request", "bad request\n").await;
                     break 'conn;
                 }
             }
 
-            let waiting_new = buf.is_empty();
-            if waiting_new && *shutdown.borrow() {
-                break 'conn; // shutting down and idle → close cleanly
-            }
-            match read_some(&mut rd, &mut buf, &mut shutdown, timeout, waiting_new).await {
-                ReadOutcome::Bytes => {}
-                ReadOutcome::Eof => {
-                    if !buf.is_empty() {
-                        let _ = wr
-                            .write_all(&build_response(
-                                400,
-                                "Bad Request",
-                                "incomplete request\n",
-                                false,
-                                true,
-                            ))
-                            .await;
-                    }
+            if buf.is_empty() {
+                // Idle between requests: wait for the next one to begin, but close
+                // promptly on shutdown or after an idle `request_timeout`.
+                if *shutdown.borrow() {
                     break 'conn;
                 }
-                ReadOutcome::Timeout => {
-                    if !buf.is_empty() {
-                        let _ = wr
-                            .write_all(&build_response(
-                                408,
-                                "Request Timeout",
-                                "request timeout\n",
-                                false,
-                                true,
-                            ))
-                            .await;
-                    }
-                    break 'conn;
+                match read_idle(&mut rd, &mut buf, &mut shutdown, request_timeout).await {
+                    ReadOutcome::Bytes => {}
+                    _ => break 'conn, // idle timeout / EOF / shutdown / error → close
                 }
-                ReadOutcome::Shutdown | ReadOutcome::Err => break 'conn,
+            } else {
+                // A request is in progress: the whole head must arrive by the deadline.
+                let dl = *deadline.get_or_insert_with(|| Instant::now() + request_timeout);
+                match read_until(&mut rd, &mut buf, dl).await {
+                    ReadOutcome::Bytes => {}
+                    ReadOutcome::Timeout => {
+                        respond(&mut wr, 408, "Request Timeout", "request timeout\n").await;
+                        break 'conn;
+                    }
+                    ReadOutcome::Eof => {
+                        respond(&mut wr, 400, "Bad Request", "incomplete request\n").await;
+                        break 'conn;
+                    }
+                    ReadOutcome::Shutdown | ReadOutcome::Err => break 'conn,
+                }
             }
         };
 
-        // Bound and buffer the body.
+        // Bound and buffer the body, under the same per-request deadline.
         if head.content_length > state.config.max_body_bytes {
-            let _ = wr
-                .write_all(&build_response(
-                    413,
-                    "Payload Too Large",
-                    "payload too large\n",
-                    false,
-                    true,
-                ))
-                .await;
+            respond(&mut wr, 413, "Payload Too Large", "payload too large\n").await;
             break 'conn;
         }
         let total = head_len + head.content_length;
+        let dl = deadline.unwrap_or_else(|| Instant::now() + request_timeout);
         while buf.len() < total {
-            match read_some(&mut rd, &mut buf, &mut shutdown, timeout, false).await {
+            match read_until(&mut rd, &mut buf, dl).await {
                 ReadOutcome::Bytes => {}
-                _ => break 'conn, // EOF / timeout / error mid-body → abort
+                ReadOutcome::Timeout => {
+                    respond(&mut wr, 408, "Request Timeout", "request timeout\n").await;
+                    break 'conn;
+                }
+                _ => break 'conn, // EOF / error mid-body → abort
             }
         }
 
@@ -252,6 +242,16 @@ async fn handle_connection(
             break 'conn;
         }
     }
+}
+
+/// Write a small error/response and ignore the result (we're about to close).
+async fn respond(
+    wr: &mut tokio::net::tcp::OwnedWriteHalf,
+    status: u16,
+    reason: &str,
+    body: &str,
+) {
+    let _ = wr.write_all(&build_response(status, reason, body, false, true)).await;
 }
 
 /// Route a request to `(status, reason, body)`.
@@ -274,7 +274,7 @@ async fn route(head: &RequestHead, state: &AppState) -> (u16, &'static str, Stri
     }
 }
 
-/// Outcome of a single timed read.
+/// Outcome of a single read.
 enum ReadOutcome {
     Bytes,
     Eof,
@@ -283,28 +283,41 @@ enum ReadOutcome {
     Err,
 }
 
-/// Do one timed read into `buf`. When `waiting_new` (between requests), a
-/// shutdown also interrupts so idle keep-alive connections close promptly.
-async fn read_some(
+/// One read while *idle* between requests: bounded by `idle` and interrupted by
+/// shutdown, so keep-alive connections close promptly.
+async fn read_idle(
     rd: &mut tokio::net::tcp::OwnedReadHalf,
     buf: &mut Vec<u8>,
     shutdown: &mut watch::Receiver<bool>,
-    timeout: std::time::Duration,
-    waiting_new: bool,
+    idle: std::time::Duration,
 ) -> ReadOutcome {
     let mut tmp = [0u8; 8192];
-    let read = tokio::time::timeout(timeout, rd.read(&mut tmp));
-
-    let result = if waiting_new {
-        tokio::select! {
-            biased;
-            _ = shutdown.changed() => return ReadOutcome::Shutdown,
-            r = read => r,
-        }
-    } else {
-        read.await
+    let result = tokio::select! {
+        biased;
+        _ = shutdown.changed() => return ReadOutcome::Shutdown,
+        r = tokio::time::timeout(idle, rd.read(&mut tmp)) => r,
     };
+    classify(result, buf, &tmp)
+}
 
+/// One read while a request is *in progress*: bounded by the absolute
+/// per-request `deadline` (not reset per read), which is what stops slow-loris.
+async fn read_until(
+    rd: &mut tokio::net::tcp::OwnedReadHalf,
+    buf: &mut Vec<u8>,
+    deadline: Instant,
+) -> ReadOutcome {
+    let mut tmp = [0u8; 8192];
+    let result = tokio::time::timeout_at(deadline, rd.read(&mut tmp)).await;
+    classify(result, buf, &tmp)
+}
+
+/// Turn a `timeout` result into a [`ReadOutcome`], appending any bytes read.
+fn classify(
+    result: Result<io::Result<usize>, tokio::time::error::Elapsed>,
+    buf: &mut Vec<u8>,
+    tmp: &[u8],
+) -> ReadOutcome {
     match result {
         Ok(Ok(0)) => ReadOutcome::Eof,
         Ok(Ok(n)) => {
