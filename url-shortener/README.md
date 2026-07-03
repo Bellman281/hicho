@@ -13,6 +13,15 @@ business logic is framework- and database-agnostic and fully unit-testable.
 > hardening middleware, opt-in per-IP rate limiting, and an optional Redis
 > read-cache. Scaling deep-dive: [`./docs/SCALING.md`](./docs/SCALING.md).
 
+## Architecture
+
+![url-shortener architecture: hexagonal layers (api → application → domain ← infrastructure) with dependencies pointing inward, plus the concurrency pieces — a Mutex rate limiter, an actor/Redis cache, a channel-batched hit counter, and lock-free atomic metrics — all wired into one read-only Arc<AppState>](docs/img/architecture.svg)
+
+Layers depend only *inward* (`api → application → domain ← infrastructure`), and
+each concurrency concern uses the tool that fits its access pattern — see
+[`./docs/CONCURRENCY.md`](./docs/CONCURRENCY.md) for the full reasoning and
+[`./docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the layer walkthrough.
+
 ## Endpoints
 
 | Method | Path | Purpose |

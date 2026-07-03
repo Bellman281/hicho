@@ -13,6 +13,10 @@ connections through an actor, and shuts down gracefully.
 
 ## Architecture
 
+![tcp-actor-server architecture: accept loop with a per-connection semaphore permit, per-connection read/write tasks, a registry actor over channels, lock-free atomic metrics, and a watch-based graceful shutdown](docs/img/architecture.svg)
+
+<details><summary>Text version</summary>
+
 ```
                       accept loop (bounded by a Semaphore permit / connection)
                                      │  into_split()
@@ -30,6 +34,8 @@ connections through an actor, and shuts down gracefully.
         │ (no lock, messages)  │                 └────────────────────┘
         └──────────────────────┘
 ```
+
+</details>
 
 Why these choices (the same reasoning we applied elsewhere):
 

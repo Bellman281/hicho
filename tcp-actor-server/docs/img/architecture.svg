@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#7c3aed"/>
+    </marker>
+    <style>
+      .t   { fill:#0f172a; }
+      .sub { fill:#475569; font-size:11px; }
+      .lbl { fill:#64748b; font-size:10.5px; }
+      .box { fill:#ffffff; stroke:#cbd5e1; stroke-width:1.5; }
+      .task{ fill:#eff6ff; stroke:#3b82f6; stroke-width:1.5; }
+      .actor{ fill:#f5f3ff; stroke:#7c3aed; stroke-width:1.5; }
+      .atom{ fill:#ecfdf5; stroke:#10b981; stroke-width:1.5; }
+      .flag{ fill:#fff7ed; stroke:#f59e0b; stroke-width:1.5; }
+      .h   { font-weight:700; }
+      .flow{ stroke:#475569; stroke-width:1.6; fill:none; }
+      .msg { stroke:#7c3aed; stroke-width:1.5; fill:none; stroke-dasharray:5 4; }
+    </style>
+  </defs>
+
+  <rect x="1" y="1" width="898" height="518" rx="14" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="26" y="34" class="t h" font-size="17">tcp-actor-server — architecture</text>
+  <text x="26" y="52" class="sub">Non-blocking Tokio · per-connection tasks · one registry actor · lock-free metrics · no unsafe</text>
+
+  <!-- clients -->
+  <rect class="box" x="26" y="96" width="120" height="120" rx="10"/>
+  <text x="86" y="126" class="t h" font-size="13" text-anchor="middle">clients</text>
+  <text x="86" y="146" class="lbl" text-anchor="middle">many TCP</text>
+  <text x="86" y="160" class="lbl" text-anchor="middle">connections</text>
+  <rect x="46" y="172" width="80" height="12" rx="3" fill="#e2e8f0"/>
+  <rect x="46" y="188" width="80" height="12" rx="3" fill="#e2e8f0"/>
+
+  <!-- accept loop -->
+  <rect class="box" x="196" y="86" width="180" height="140" rx="10"/>
+  <text x="286" y="116" class="t h" font-size="13" text-anchor="middle">accept loop</text>
+  <text x="286" y="140" class="sub" text-anchor="middle">Semaphore permit</text>
+  <text x="286" y="156" class="sub" text-anchor="middle">per connection</text>
+  <text x="286" y="176" class="lbl" text-anchor="middle">≤ max_connections</text>
+  <text x="286" y="192" class="lbl" text-anchor="middle">(backpressure when full)</text>
+  <text x="286" y="210" class="lbl" text-anchor="middle">tokio::spawn a task</text>
+
+  <!-- connection tasks -->
+  <rect class="task" x="430" y="70" width="210" height="76" rx="10"/>
+  <rect class="task" x="430" y="86" width="210" height="76" rx="10"/>
+  <rect class="task" x="430" y="104" width="210" height="86" rx="10"/>
+  <text x="535" y="130" class="t h" font-size="13" text-anchor="middle">connection task</text>
+  <text x="535" y="150" class="sub" text-anchor="middle">into_split(): read ┆ write</text>
+  <text x="535" y="168" class="lbl" text-anchor="middle">keep-alive · whole-request deadline</text>
+  <text x="535" y="182" class="lbl" text-anchor="middle">(one task owns its stream — no lock)</text>
+
+  <!-- registry actor -->
+  <rect class="actor" x="690" y="74" width="184" height="92" rx="10"/>
+  <text x="782" y="102" class="t h" font-size="13" text-anchor="middle">registry actor</text>
+  <text x="782" y="122" class="sub" text-anchor="middle">owns HashMap&lt;id, addr&gt;</text>
+  <text x="782" y="138" class="lbl" text-anchor="middle">mpsc + oneshot · no lock</text>
+  <text x="782" y="154" class="lbl" text-anchor="middle">RAII drop → deregister</text>
+
+  <!-- metrics -->
+  <rect class="atom" x="690" y="188" width="184" height="74" rx="10"/>
+  <text x="782" y="214" class="t h" font-size="13" text-anchor="middle">metrics</text>
+  <text x="782" y="234" class="sub" text-anchor="middle">AtomicU64 (lock-free)</text>
+  <text x="782" y="250" class="lbl" text-anchor="middle">connections / requests</text>
+
+  <!-- flows -->
+  <path class="flow" d="M146 156 H196" marker-end="url(#arr)"/>
+  <path class="flow" d="M376 150 H428" marker-end="url(#arr)"/>
+  <path class="msg" d="M642 120 H688" marker-end="url(#arrb)"/>
+  <text x="664" y="112" class="lbl" text-anchor="middle" fill="#7c3aed">register /</text>
+  <text x="666" y="176" class="lbl" text-anchor="middle" fill="#7c3aed">deregister</text>
+  <path class="flow" d="M642 168 C665 168, 665 220, 688 220" marker-end="url(#arr)"/>
+  <text x="664" y="210" class="lbl" text-anchor="middle">count++</text>
+
+  <!-- shutdown flag -->
+  <rect class="flag" x="196" y="300" width="444" height="66" rx="10"/>
+  <text x="418" y="326" class="t h" font-size="13" text-anchor="middle">watch(shutdown) flag</text>
+  <text x="418" y="346" class="sub" text-anchor="middle">stop accepting · connections finish in-flight request and close</text>
+  <text x="418" y="360" class="lbl" text-anchor="middle">then drain: re-acquire ALL permits (bounded by grace)</text>
+  <path class="flow" d="M286 300 V232" marker-end="url(#arr)"/>
+  <path class="flow" d="M535 300 V196" marker-end="url(#arr)"/>
+
+  <!-- /status reads registry+metrics -->
+  <text x="782" y="292" class="lbl" text-anchor="middle">GET /status reads both ↑</text>
+
+  <!-- routes footer -->
+  <rect class="box" x="26" y="300" width="150" height="66" rx="10"/>
+  <text x="101" y="324" class="t h" font-size="12" text-anchor="middle">routes</text>
+  <text x="101" y="342" class="lbl" text-anchor="middle">GET / · /healthz</text>
+  <text x="101" y="356" class="lbl" text-anchor="middle">/status</text>
+
+  <!-- legend -->
+  <text x="26" y="410" class="sub h">Legend</text>
+  <rect class="task" x="26" y="420" width="16" height="12" rx="3"/><text x="50" y="430" class="lbl">connection task (owns read+write, isolated)</text>
+  <rect class="actor" x="330" y="420" width="16" height="12" rx="3"/><text x="354" y="430" class="lbl">actor (owns state, message-passed, no lock)</text>
+  <rect class="atom" x="640" y="420" width="16" height="12" rx="3"/><text x="664" y="430" class="lbl">lock-free atomics</text>
+  <path class="msg" d="M26 452 H60" marker-end="url(#arrb)"/><text x="70" y="456" class="lbl">message (mpsc/oneshot)</text>
+  <path class="flow" d="M300 452 H334" marker-end="url(#arr)"/><text x="344" y="456" class="lbl">data / control flow</text>
+  <rect class="flag" x="640" y="444" width="16" height="12" rx="3"/><text x="664" y="454" class="lbl">shutdown signal (watch)</text>
+</svg>
