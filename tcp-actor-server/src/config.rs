@@ -32,7 +32,7 @@ impl Config {
     /// development-friendly defaults. Errors only when a provided value is
     /// present but unparseable.
     pub fn from_env() -> Result<Self, ConfigError> {
-        let bind_addr = env_or("APP_BIND_ADDR", "127.0.0.1:8080")
+        let bind_addr = env_or("APP_BIND_ADDR", "127.0.0.1:8100")
             .parse()
             .map_err(|_| ConfigError::Invalid("APP_BIND_ADDR"))?;
 

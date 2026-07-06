@@ -6,18 +6,18 @@
 # Usage:
 #   ./scripts/loadtest.sh [URL] [DURATION] [CONNECTIONS] [THREADS]
 # Defaults:
-#   URL=http://127.0.0.1:8080/  DURATION=30s  CONNECTIONS=10000  THREADS=8
+#   URL=http://127.0.0.1:8100/  DURATION=30s  CONNECTIONS=10000  THREADS=8
 #
 # Requires `wrk` (https://github.com/wg/wrk). `ab` alternative shown below.
 set -euo pipefail
 
-URL="${1:-http://127.0.0.1:8080/}"
+URL="${1:-http://127.0.0.1:8100/}"
 DURATION="${2:-30s}"
 CONNECTIONS="${3:-10000}"
 THREADS="${4:-8}"
 
 echo "Start the server first, e.g.:"
-echo "  MAX_CONNECTIONS=20000 APP_BIND_ADDR=127.0.0.1:8080 cargo run --release"
+echo "  MAX_CONNECTIONS=20000 APP_BIND_ADDR=127.0.0.1:8100 cargo run --release"
 echo
 echo "You may need a higher open-file limit for 10k+ connections:"
 echo "  ulimit -n 65535"

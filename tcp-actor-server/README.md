@@ -80,21 +80,21 @@ function.
 
 ```bash
 cp .env.example .env     # optional; defaults work
-cargo run                # serves on 127.0.0.1:8080
+cargo run                # serves on 127.0.0.1:8100
 # or:
-APP_BIND_ADDR=0.0.0.0:8080 MAX_CONNECTIONS=20000 cargo run --release
+APP_BIND_ADDR=0.0.0.0:8100 MAX_CONNECTIONS=20000 cargo run --release
 ```
 
 ```bash
-curl -i http://127.0.0.1:8080/
-curl -s http://127.0.0.1:8080/status
+curl -i http://127.0.0.1:8100/
+curl -s http://127.0.0.1:8100/status
 ```
 
 ## Configuration (env)
 
 | Var | Default | Meaning |
 |---|---|---|
-| `APP_BIND_ADDR` | `127.0.0.1:8080` | bind address |
+| `APP_BIND_ADDR` | `127.0.0.1:8100` | bind address |
 | `MAX_CONNECTIONS` | `10000` | concurrent-connection cap (backpressure) |
 | `MAX_BODY_BYTES` | `65536` | max request body (else `413`) |
 | `REQUEST_TIMEOUT_SECS` | `30` | per-read inactivity timeout |
@@ -121,7 +121,7 @@ measure on real hardware — this repo ships the driver, not fabricated numbers:
 ```bash
 ulimit -n 65535
 MAX_CONNECTIONS=20000 cargo run --release &
-./scripts/loadtest.sh http://127.0.0.1:8080/ 30s 10000 8   # needs `wrk`
+./scripts/loadtest.sh http://127.0.0.1:8100/ 30s 10000 8   # needs `wrk`
 ```
 
 ## Quality gates
